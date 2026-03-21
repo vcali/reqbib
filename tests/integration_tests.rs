@@ -299,7 +299,7 @@ fn test_list_with_filter() {
     // Add multiple commands
     let commands = vec![
         "curl https://api.github.com/users",
-        "curl https://example.com/test", 
+        "curl https://example.com/test",
         "curl -X POST https://api.github.com/repos",
         "curl https://gitlab.com/api/projects",
     ];
@@ -318,20 +318,24 @@ fn test_list_with_filter() {
 
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("Found 2 matching curl command(s):"))
+        .stdout(predicate::str::contains(
+            "Found 2 matching curl command(s):",
+        ))
         .stdout(predicate::str::contains("api.github.com/users"))
         .stdout(predicate::str::contains("api.github.com/repos"))
         .stdout(predicate::str::contains("example.com").not())
         .stdout(predicate::str::contains("gitlab.com").not());
 
-    // Test filtering with multiple keywords 
+    // Test filtering with multiple keywords
     let mut cmd = Command::cargo_bin("reqbib").unwrap();
     cmd.env("HOME", temp_dir.path());
     cmd.args(["-l", "github", "api"]);
 
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("Found 2 matching curl command(s):"))
+        .stdout(predicate::str::contains(
+            "Found 2 matching curl command(s):",
+        ))
         .stdout(predicate::str::contains("api.github.com/users"))
         .stdout(predicate::str::contains("api.github.com/repos"));
 
@@ -342,7 +346,9 @@ fn test_list_with_filter() {
 
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("Found 1 matching curl command(s):"))
+        .stdout(predicate::str::contains(
+            "Found 1 matching curl command(s):",
+        ))
         .stdout(predicate::str::contains("api.github.com/repos"))
         .stdout(predicate::str::contains("api.github.com/users").not());
 }

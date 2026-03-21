@@ -277,7 +277,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(keywords) = matches.get_many::<String>("keywords") {
             let keyword_vec: Vec<String> = keywords.cloned().collect();
             let results = db.search(&keyword_vec);
-            
+
             if results.is_empty() {
                 println!(
                     "No curl commands found matching keywords: {}",
