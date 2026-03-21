@@ -1,0 +1,10 @@
+# Clippy configuration for reqbib
+# See https://doc.rust-lang.org/clippy/configuration.html
+
+# Allow some clippy lints that might be too strict for this project
+avoid-breaking-exported-api = false
+msrv = "1.70.0"
+
+# Configure specific lint levels
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
