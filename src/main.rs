@@ -273,13 +273,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     } else if matches.get_flag("list") {
-        // List all commands
-        if db.commands.is_empty() {
-            println!("No curl commands stored. Use 'reqbib -a <curl_command>' to add one or 'reqbib -i' to import from history.");
+        // List all commands or filter if keywords provided
+        if let Some(keywords) = matches.get_many::<String>("keywords") {
+            let keyword_vec: Vec<String> = keywords.cloned().collect();
+            let results = db.search(&keyword_vec);
+            
+            if results.is_empty() {
+                println!(
+                    "No curl commands found matching keywords: {}",
+                    keyword_vec.join(" ")
+                );
+            } else {
+                println!("Found {} matching curl command(s):", results.len());
+                for cmd in results {
+                    println!("{}", cmd.command);
+                }
+            }
         } else {
-            println!("All stored curl commands ({}):", db.commands.len());
-            for cmd in &db.commands {
-                println!("{}", cmd.command);
+            // List all commands when no keywords provided
+            if db.commands.is_empty() {
+                println!("No curl commands stored. Use 'reqbib -a <curl_command>' to add one or 'reqbib -i' to import from history.");
+            } else {
+                println!("All stored curl commands ({}):", db.commands.len());
+                for cmd in &db.commands {
+                    println!("{}", cmd.command);
+                }
             }
         }
     } else if let Some(keywords) = matches.get_many::<String>("keywords") {

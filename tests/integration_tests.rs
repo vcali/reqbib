@@ -291,3 +291,78 @@ fn test_invalid_command_line_args() {
         .failure()
         .stderr(predicate::str::contains("error: unexpected argument"));
 }
+
+#[test]
+fn test_list_with_filter() {
+    let temp_dir = TempDir::new().unwrap();
+
+    // Add multiple commands
+    let commands = vec![
+        "curl https://api.github.com/users",
+        "curl https://example.com/test", 
+        "curl -X POST https://api.github.com/repos",
+        "curl https://gitlab.com/api/projects",
+    ];
+
+    for command in commands {
+        let mut cmd = Command::cargo_bin("reqbib").unwrap();
+        cmd.env("HOME", temp_dir.path());
+        cmd.arg("--add").arg(command);
+        cmd.assert().success();
+    }
+
+    // Test filtering with single keyword
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", temp_dir.path());
+    cmd.args(["-l", "github"]);
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("Found 2 matching curl command(s):"))
+        .stdout(predicate::str::contains("api.github.com/users"))
+        .stdout(predicate::str::contains("api.github.com/repos"))
+        .stdout(predicate::str::contains("example.com").not())
+        .stdout(predicate::str::contains("gitlab.com").not());
+
+    // Test filtering with multiple keywords 
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", temp_dir.path());
+    cmd.args(["-l", "github", "api"]);
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("Found 2 matching curl command(s):"))
+        .stdout(predicate::str::contains("api.github.com/users"))
+        .stdout(predicate::str::contains("api.github.com/repos"));
+
+    // Test filtering with very specific keywords
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", temp_dir.path());
+    cmd.args(["-l", "github", "POST"]);
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("Found 1 matching curl command(s):"))
+        .stdout(predicate::str::contains("api.github.com/repos"))
+        .stdout(predicate::str::contains("api.github.com/users").not());
+}
+
+#[test]
+fn test_list_with_filter_no_results() {
+    let temp_dir = TempDir::new().unwrap();
+
+    // Add a command
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", temp_dir.path());
+    cmd.arg("--add").arg("curl https://example.com");
+    cmd.assert().success();
+
+    // Filter with non-matching keyword
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", temp_dir.path());
+    cmd.args(["-l", "nonexistent"]);
+
+    cmd.assert().success().stdout(predicate::str::contains(
+        "No curl commands found matching keywords: nonexistent",
+    ));
+}
