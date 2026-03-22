@@ -3,7 +3,40 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
+const FILTERED_WORDS: &[&str] = &["curl", "http", "https", "www"];
+
+fn url_regex() -> &'static Regex {
+    static URL_REGEX: OnceLock<Regex> = OnceLock::new();
+    URL_REGEX.get_or_init(|| Regex::new(r"https?://([^/\s]+)").expect("valid URL regex"))
+}
+
+fn path_regex() -> &'static Regex {
+    static PATH_REGEX: OnceLock<Regex> = OnceLock::new();
+    PATH_REGEX.get_or_init(|| Regex::new(r"https?://[^/\s]+/([^\s?]+)").expect("valid path regex"))
+}
+
+fn header_regex() -> &'static Regex {
+    static HEADER_REGEX: OnceLock<Regex> = OnceLock::new();
+    HEADER_REGEX.get_or_init(|| Regex::new(r#"-H\s+["']([^"']+)["']"#).expect("valid header regex"))
+}
+
+fn method_regex() -> &'static Regex {
+    static METHOD_REGEX: OnceLock<Regex> = OnceLock::new();
+    METHOD_REGEX.get_or_init(|| Regex::new(r"-X\s+(\w+)").expect("valid method regex"))
+}
+
+fn word_regex() -> &'static Regex {
+    static WORD_REGEX: OnceLock<Regex> = OnceLock::new();
+    WORD_REGEX.get_or_init(|| Regex::new(r"\b[a-zA-Z]{3,}\b").expect("valid word regex"))
+}
+
+fn history_curl_regex() -> &'static Regex {
+    static HISTORY_CURL_REGEX: OnceLock<Regex> = OnceLock::new();
+    HISTORY_CURL_REGEX.get_or_init(|| Regex::new(r"^(\s*curl\s+.*)$").expect("valid history regex"))
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 struct CurlCommand {
@@ -30,7 +63,7 @@ impl CurlDatabase {
         }
     }
 
-    fn load_from_file(path: &PathBuf) -> Result<Self, Box<dyn std::error::Error>> {
+    fn load_from_file(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         if path.exists() {
             let content = fs::read_to_string(path)?;
             let db: CurlDatabase = serde_json::from_str(&content)?;
@@ -40,7 +73,7 @@ impl CurlDatabase {
         }
     }
 
-    fn save_to_file(&self, path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    fn save_to_file(&self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -49,25 +82,54 @@ impl CurlDatabase {
         Ok(())
     }
 
-    fn add_command(&mut self, command: String) {
-        let curl_cmd = CurlCommand::new(command);
-
-        // Check for duplicates
-        if !self.commands.iter().any(|c| c.command == curl_cmd.command) {
-            self.commands.push(curl_cmd);
+    fn add_command(&mut self, command: String) -> bool {
+        if self
+            .commands
+            .iter()
+            .any(|existing| existing.command == command)
+        {
+            false
+        } else {
+            self.commands.push(CurlCommand::new(command));
+            true
         }
     }
 
+    fn add_commands<I>(&mut self, commands: I) -> usize
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut seen: HashSet<String> = self
+            .commands
+            .iter()
+            .map(|cmd| cmd.command.clone())
+            .collect();
+        let mut added_count = 0;
+
+        for command in commands {
+            if seen.insert(command.clone()) {
+                self.commands.push(CurlCommand::new(command));
+                added_count += 1;
+            }
+        }
+
+        added_count
+    }
+
     fn search(&self, keywords: &[String]) -> Vec<&CurlCommand> {
+        let normalized_keywords: Vec<String> = keywords
+            .iter()
+            .map(|keyword| keyword.to_lowercase())
+            .collect();
+
         self.commands
             .iter()
             .filter(|cmd| {
-                keywords.iter().all(|keyword| {
-                    let keyword_lower = keyword.to_lowercase();
-                    cmd.keywords
-                        .iter()
-                        .any(|k| k.to_lowercase().contains(&keyword_lower))
-                        || cmd.command.to_lowercase().contains(&keyword_lower)
+                let command_lower = cmd.command.to_lowercase();
+
+                normalized_keywords.iter().all(|keyword| {
+                    cmd.keywords.iter().any(|stored| stored.contains(keyword))
+                        || command_lower.contains(keyword)
                 })
             })
             .collect()
@@ -78,11 +140,10 @@ fn extract_keywords(command: &str) -> Vec<String> {
     let mut keywords = HashSet::new();
 
     // Extract URLs and domain names
-    let url_regex = Regex::new(r"https?://([^/\s]+)").unwrap();
-    for cap in url_regex.captures_iter(command) {
+    for cap in url_regex().captures_iter(command) {
         if let Some(domain) = cap.get(1) {
-            let domain_str = domain.as_str();
-            keywords.insert(domain_str.to_string());
+            let domain_str = domain.as_str().to_lowercase();
+            keywords.insert(domain_str.clone());
 
             // Also add parts of the domain, but filter out common prefixes
             for part in domain_str.split('.') {
@@ -94,36 +155,30 @@ fn extract_keywords(command: &str) -> Vec<String> {
     }
 
     // Extract path segments
-    let path_regex = Regex::new(r"https?://[^/\s]+/([^\s?]+)").unwrap();
-    for cap in path_regex.captures_iter(command) {
+    for cap in path_regex().captures_iter(command) {
         if let Some(path) = cap.get(1) {
             for segment in path.as_str().split('/') {
                 if !segment.is_empty() && segment.len() > 2 {
-                    keywords.insert(segment.to_string());
+                    keywords.insert(segment.to_lowercase());
                 }
             }
         }
     }
 
     // Extract header names and values
-    let header_regex = Regex::new(r#"-H\s+["']([^"']+)["']"#).unwrap();
-    for cap in header_regex.captures_iter(command) {
+    for cap in header_regex().captures_iter(command) {
         if let Some(header) = cap.get(1) {
             let header_str = header.as_str();
-            let header_parts: Vec<&str> = header_str.split(':').collect();
-            if header_parts.len() >= 2 {
-                // Add header name
-                let header_name = header_parts[0].trim();
+            if let Some((header_name, header_value)) = header_str.split_once(':') {
+                let header_name = header_name.trim().to_lowercase();
                 if !header_name.is_empty() {
-                    keywords.insert(header_name.to_string());
+                    keywords.insert(header_name);
                 }
 
-                // Add words from header value
-                let header_value = header_parts[1..].join(":").trim().to_string();
                 let value_words: Vec<&str> = header_value.split_whitespace().collect();
                 for word in value_words {
                     if word.len() > 2 {
-                        keywords.insert(word.to_string());
+                        keywords.insert(word.to_lowercase());
                     }
                 }
             }
@@ -131,25 +186,23 @@ fn extract_keywords(command: &str) -> Vec<String> {
     }
 
     // Extract HTTP methods and common curl options
-    let method_regex = Regex::new(r"-X\s+(\w+)").unwrap();
-    for cap in method_regex.captures_iter(command) {
+    for cap in method_regex().captures_iter(command) {
         if let Some(method) = cap.get(1) {
-            keywords.insert(method.as_str().to_string());
+            keywords.insert(method.as_str().to_lowercase());
         }
     }
 
     // Extract common words from the command, but filter out common curl-related words
-    let word_regex = Regex::new(r"\b[a-zA-Z]{3,}\b").unwrap();
-    let filtered_words = ["curl", "http", "https", "www"];
-
-    for cap in word_regex.find_iter(command) {
+    for cap in word_regex().find_iter(command) {
         let word = cap.as_str().to_lowercase();
-        if !filtered_words.contains(&word.as_str()) {
+        if !FILTERED_WORDS.contains(&word.as_str()) {
             keywords.insert(word);
         }
     }
 
-    keywords.into_iter().collect()
+    let mut keywords: Vec<String> = keywords.into_iter().collect();
+    keywords.sort();
+    keywords
 }
 
 fn get_data_file_path() -> PathBuf {
@@ -162,7 +215,7 @@ fn get_data_file_path() -> PathBuf {
 // Refactored to accept history content as a parameter for easier testing
 fn parse_curl_commands_from_history(history_content: &str) -> Vec<String> {
     let mut curl_commands = Vec::new();
-    let curl_regex = Regex::new(r"^(\s*curl\s+.*)$").unwrap();
+    let mut seen = HashSet::new();
 
     for line in history_content.lines() {
         // For zsh history, remove timestamp prefix if present
@@ -176,10 +229,10 @@ fn parse_curl_commands_from_history(history_content: &str) -> Vec<String> {
             line
         };
 
-        if let Some(cap) = curl_regex.captures(clean_line) {
+        if let Some(cap) = history_curl_regex().captures(clean_line) {
             if let Some(curl_cmd) = cap.get(1) {
                 let cmd = curl_cmd.as_str().trim().to_string();
-                if !curl_commands.contains(&cmd) {
+                if seen.insert(cmd.clone()) {
                     curl_commands.push(cmd);
                 }
             }
@@ -189,20 +242,26 @@ fn parse_curl_commands_from_history(history_content: &str) -> Vec<String> {
     curl_commands
 }
 
+fn parse_curl_commands_from_history_bytes(history_content: &[u8]) -> Vec<String> {
+    let history_content = String::from_utf8_lossy(history_content);
+    parse_curl_commands_from_history(history_content.as_ref())
+}
+
 fn import_from_history() -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
 
     // Try both bash and zsh history files
-    let history_files = vec![home.join(".bash_history"), home.join(".zsh_history")];
+    let history_files = [home.join(".bash_history"), home.join(".zsh_history")];
 
     let mut all_commands = Vec::new();
+    let mut seen = HashSet::new();
 
     for history_file in history_files {
         if history_file.exists() {
-            if let Ok(content) = fs::read_to_string(&history_file) {
-                let commands = parse_curl_commands_from_history(&content);
+            if let Ok(content) = fs::read(&history_file) {
+                let commands = parse_curl_commands_from_history_bytes(&content);
                 for cmd in commands {
-                    if !all_commands.contains(&cmd) {
+                    if seen.insert(cmd.clone()) {
                         all_commands.push(cmd);
                     }
                 }
@@ -213,8 +272,8 @@ fn import_from_history() -> Result<Vec<String>, Box<dyn std::error::Error>> {
     Ok(all_commands)
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let matches = Command::new("reqbib")
+fn build_cli() -> Command {
+    Command::new("reqbib")
         .about("A CLI tool for managing curl commands")
         .version("0.1.0")
         .arg(
@@ -243,7 +302,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .help("Keywords to search for")
                 .num_args(0..),
         )
-        .get_matches();
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let matches = build_cli().get_matches();
 
     let data_file = get_data_file_path();
     let mut db = CurlDatabase::load_from_file(&data_file)?;
@@ -257,12 +319,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Import from shell history
         match import_from_history() {
             Ok(commands) => {
-                let initial_count = db.commands.len();
-                for cmd in commands {
-                    db.add_command(cmd);
-                }
+                let added_count = db.add_commands(commands);
                 db.save_to_file(&data_file)?;
-                let added_count = db.commands.len() - initial_count;
                 println!(
                     "Imported {} new curl commands from shell history",
                     added_count
@@ -318,35 +376,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     } else {
         // Show help when no arguments provided
-        let mut cmd = Command::new("reqbib")
-            .about("A CLI tool for managing curl commands")
-            .version("0.1.0")
-            .arg(
-                Arg::new("add")
-                    .short('a')
-                    .long("add")
-                    .value_name("CURL_COMMAND")
-                    .help("Add a new curl command"),
-            )
-            .arg(
-                Arg::new("import")
-                    .short('i')
-                    .long("import")
-                    .help("Import curl commands from shell history")
-                    .action(clap::ArgAction::SetTrue),
-            )
-            .arg(
-                Arg::new("list")
-                    .short('l')
-                    .long("list")
-                    .help("List all stored curl commands")
-                    .action(clap::ArgAction::SetTrue),
-            )
-            .arg(
-                Arg::new("keywords")
-                    .help("Keywords to search for")
-                    .num_args(0..),
-            );
+        let mut cmd = build_cli();
         cmd.print_help()?;
         println!();
     }
@@ -381,8 +411,8 @@ mod tests {
         assert!(keywords.contains(&"api".to_string()));
         assert!(keywords.contains(&"user".to_string()));
         assert!(keywords.contains(&"repos".to_string()));
-        assert!(keywords.contains(&"Authorization".to_string()));
-        assert!(keywords.contains(&"POST".to_string()));
+        assert!(keywords.contains(&"authorization".to_string()));
+        assert!(keywords.contains(&"post".to_string()));
         assert!(keywords.contains(&"token".to_string()));
         assert!(keywords.contains(&"name".to_string()));
         assert!(keywords.contains(&"test".to_string()));
@@ -565,14 +595,25 @@ curl -X POST https://example3.com
     }
 
     #[test]
+    fn test_parse_curl_commands_from_non_utf8_history() {
+        let history_bytes = b": 1647875000:0;curl https://example.com\n\x83\xffgarbage\n: 1647875001:0;curl -X POST https://api.github.com/repos\n";
+
+        let commands = parse_curl_commands_from_history_bytes(history_bytes);
+
+        assert_eq!(commands.len(), 2);
+        assert!(commands.contains(&"curl https://example.com".to_string()));
+        assert!(commands.contains(&"curl -X POST https://api.github.com/repos".to_string()));
+    }
+
+    #[test]
     fn test_extract_keywords_with_headers() {
         let command = r#"curl -H "Content-Type: application/json" -H "Authorization: Bearer xyz" https://api.example.com"#;
         let keywords = extract_keywords(command);
 
-        assert!(keywords.contains(&"Content-Type".to_string()));
-        assert!(keywords.contains(&"Authorization".to_string()));
+        assert!(keywords.contains(&"content-type".to_string()));
+        assert!(keywords.contains(&"authorization".to_string()));
         assert!(keywords.contains(&"application".to_string()));
-        assert!(keywords.contains(&"Bearer".to_string()));
+        assert!(keywords.contains(&"bearer".to_string()));
         assert!(keywords.contains(&"example".to_string()));
         assert!(keywords.contains(&"api".to_string()));
     }
@@ -604,5 +645,21 @@ curl -X POST https://example3.com
 
         let results = db.search(&["hub".to_string()]);
         assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_curl_database_add_commands_counts_only_new_entries() {
+        let mut db = CurlDatabase::new();
+        db.add_command("curl https://example.com".to_string());
+
+        let added_count = db.add_commands([
+            "curl https://example.com".to_string(),
+            "curl https://github.com".to_string(),
+            "curl https://httpbin.org/get".to_string(),
+            "curl https://github.com".to_string(),
+        ]);
+
+        assert_eq!(added_count, 2);
+        assert_eq!(db.commands.len(), 3);
     }
 }
