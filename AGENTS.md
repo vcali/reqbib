@@ -14,17 +14,25 @@ Before making any changes, agents MUST:
    - Future expansion plans and roadmap
    - Technical architecture decisions
    - Known limitations and constraints
+   - Current defaults for shared repository config, read scope, and output behavior
 
 2. **Update `DEVELOPMENT_PLAN.md`** when making changes:
    - Mark features as completed when implementing them
    - Add new features to the appropriate sections
    - Update implementation status and examples
    - Maintain accurate documentation of the project state
+   - Keep it as a local working document only; it is gitignored and must not be committed
 
 3. **Align changes with the plan**:
    - Ensure new features fit within the project's vision
    - Follow established architectural patterns
    - Consider how changes affect future planned features
+
+### Planning and Documentation Notes
+- `DEVELOPMENT_PLAN.md` is intentionally local-only and ignored by Git
+- Detailed user-facing CLI and config documentation lives in `docs/reference.md`
+- Maintainer-oriented architecture notes live in `docs/technical-overview.md`
+- Shared repository config uses a nested `shared_repo` object rather than flat top-level keys
 
 ## Required Validation Before Commits
 

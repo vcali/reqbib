@@ -2,56 +2,48 @@
 
 ReqBib is a CLI for storing, searching, and sharing `curl` commands.
 
-The name comes from **Requests Biblioteca**: a library of useful HTTP requests that you can keep for yourself or organize with a team.
+The name comes from **Requests Biblioteca**: a library of useful HTTP requests for individuals and teams.
 
-## What It Does
+## Highlights
 
-- Store `curl` commands locally
-- Use a shared GitHub repository for team-scoped command libraries
-- Search across all teams in a shared repository
-- Import `curl` commands from your shell history
-- Search commands by extracted keywords
-- Prevent duplicate entries
-- Store team-specific command libraries inside a shared repository layout
+- Store `curl` commands locally in `~/.reqbib/commands.json`
+- Import commands from shell history with `-i`
+- Search by extracted keywords instead of exact text only
+- Use a shared team repository layout with GitHub-backed checkouts
+- Search local and shared commands together by default when `shared_repo` is configured
+- Search across all teams in a shared repository with `--all-teams`
 
-## GitHub-Backed Team Storage
+## Quick Start
 
-ReqBib can operate as a local personal tool, but it now also supports a GitHub-backed team workflow:
-
-- configure a shared repository in `~/.reqbib/config.json`
-- let ReqBib bootstrap a local checkout with `gh repo clone`
-- store team commands under `teams/<team>/commands.json`
-- keep managed checkouts refreshed automatically unless disabled in config
-
-Quick example:
-
-```json
-{
-  "github_repo": "acme/shared-reqbib",
-  "teams_dir": "teams",
-  "auto_update_repo": true
-}
-```
+Add a command locally:
 
 ```bash
-reqbib --team platform -a "curl https://api.example.com/platform/health"
-reqbib --team platform -l
+reqbib -a "curl -I https://api.github.com/users/octocat"
 ```
 
+Search locally:
 
-## Current Storage Modes
-
-### Local mode
-
-By default, ReqBib stores commands in:
-
-```text
-~/.reqbib/commands.json
+```bash
+reqbib github octocat
 ```
 
-### Shared repository mode
+If `shared_repo` is configured, that default search also includes shared team commands unless you pass `--local-only` or `--shared-only`.
 
-ReqBib can also write to a shared repository checkout using a team-based layout:
+List everything:
+
+```bash
+reqbib -l
+```
+
+Import from shell history:
+
+```bash
+reqbib -i
+```
+
+## Team Usage
+
+ReqBib can also work against a shared repository with one folder per team:
 
 ```text
 shared-reqbib/
@@ -62,224 +54,74 @@ shared-reqbib/
       commands.json
 ```
 
-Use this mode with `--repo <path>` and `--team <team-name>`.
-
-This is the current GitHub integration model: the shared repository can live on GitHub, teammates collaborate through the repository structure, ReqBib can bootstrap a local checkout via `gh repo clone`, and managed checkouts can be refreshed automatically. ReqBib still does not manage authentication, commit, or push workflows by itself.
-
-## GitHub Integration Prerequisite
-
-For GitHub-backed team storage, ReqBib relies on the GitHub CLI:
+Basic team-scoped usage:
 
 ```bash
-gh auth status
-```
+reqbib --repo /path/to/shared-reqbib --team platform -a \
+  "curl https://api.example.com/platform/health"
 
-That means:
-
-- `gh` must be installed
-- `gh` must already be authenticated for the repositories you want to use
-- `git` must be available for periodic local checkout updates
-
-Local-only usage does not require `gh`.
-
-If GitHub-backed team storage is the main use case, this is the minimum setup:
-
-1. Install and authenticate `gh`
-2. Ensure `git` is available
-3. Configure `github_repo` in `~/.reqbib/config.json`
-4. Use `reqbib --team <team> ...`
-
-## Configuration
-
-ReqBib can read local defaults from:
-
-```text
-~/.reqbib/config.json
-```
-
-Example:
-
-```json
-{
-  "github_repo": "acme/shared-reqbib",
-  "shared_repo_path": "/Users/alice/src/shared-reqbib",
-  "teams_dir": "teams",
-  "auto_update_repo": true
-}
-```
-
-Supported keys:
-
-- `github_repo`: GitHub repository identifier such as `acme/shared-reqbib`; if `shared_repo_path` is not set, ReqBib will use `gh repo clone` to create a local checkout under `~/.reqbib/repos/`
-- `shared_repo_path`: Local checkout path for the shared repository
-- `teams_dir`: Relative path to the teams directory inside that repository
-- `auto_update_repo`: When `true` or omitted, ReqBib will periodically run `git pull --ff-only` on managed GitHub checkouts; set to `false` to disable that behavior
-
-Override order:
-
-1. CLI arguments
-2. Local config file
-3. Built-in defaults
-
-Today, the config is mainly used for shared repository mode. The local command database still defaults to `~/.reqbib/commands.json`.
-
-Managed GitHub checkouts are refreshed automatically on a fixed interval. Today that interval is 15 minutes.
-
-## Usage
-
-### Show help
-
-```bash
-reqbib
-```
-
-### Add a command locally
-
-```bash
-reqbib -a "curl -I https://api.github.com/users/octocat"
-```
-
-### Search locally
-
-```bash
-reqbib github octocat
-```
-
-### List all local commands
-
-```bash
-reqbib -l
-```
-
-### Import from shell history
-
-```bash
-reqbib -i
-```
-
-### Add a command to a team repository
-
-```bash
-reqbib --repo /path/to/shared-reqbib --team platform \
-  -a "curl https://api.example.com/platform/health"
-```
-
-### Use configured repository defaults
-
-If `shared_repo_path` is set in `~/.reqbib/config.json`, you can just pass the team:
-
-```bash
-reqbib --team platform -l
-```
-
-### Use GitHub repo config with automatic checkout
-
-If `github_repo` is set and `shared_repo_path` is not, ReqBib will use `gh repo clone` on first use:
-
-```bash
-reqbib --team platform -l
-```
-
-### Override only the teams directory
-
-```bash
-reqbib --team platform --teams-dir company-teams -l
-```
-
-### List commands for one team
-
-```bash
 reqbib --repo /path/to/shared-reqbib --team platform -l
 ```
 
-### Search within one team
-
-```bash
-reqbib --repo /path/to/shared-reqbib --team payments stripe webhook
-```
-
-### Search across all teams
+Cross-team search:
 
 ```bash
 reqbib --repo /path/to/shared-reqbib --all-teams stripe webhook
 ```
 
-### List commands across all teams
+Default combined search output is grouped by source and preserves multiline commands:
 
-```bash
-reqbib --repo /path/to/shared-reqbib --all-teams -l
+```text
+Local
+
+[1]
+curl https://api.github.com/users/octocat
+
+Shared / platform
+
+[1]
+curl -X POST https://api.example.com/platform/health \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
-## How Search Works
+GitHub-backed shared usage requires:
 
-ReqBib extracts useful keywords from each command, including:
+- `gh` installed and authenticated
+- `git` available locally
 
-- Domain names and subdomains
-- URL path segments
-- HTTP methods
-- Header names and values
-- Other meaningful words in the command
+Minimal GitHub-backed config:
 
-Search is case-insensitive and supports multiple keywords.
+```json
+{
+  "shared_repo": {
+    "mode": "github",
+    "github_repo": "acme/shared-reqbib",
+    "teams_dir": "teams",
+    "auto_update_repo": true,
+    "auto_update_interval_minutes": 15
+  }
+}
+```
 
-## Sensitive Data Warning
+## Documentation
 
-Some `curl` commands contain secrets such as:
+- Detailed CLI and config reference: [`docs/reference.md`](docs/reference.md)
+- Technical overview and code structure: [`docs/technical-overview.md`](docs/technical-overview.md)
 
-- `Authorization` headers
-- Bearer tokens
-- Cookies
-- API keys
-- Session identifiers
+## Sensitive Data
 
-Today, ReqBib stores commands as provided. If you use shared repository mode, be careful not to commit live credentials. Secret detection and redaction are planned next and should be treated as a high-priority safety feature.
+ReqBib stores commands as provided. If a command contains live tokens, cookies, or other credentials, shared repository mode can expose them to teammates or commit history. Secret detection and redaction are planned but not implemented yet.
 
-## Building
+## Development
+
+Build:
 
 ```bash
 cargo build
 ```
 
-Release build:
-
-```bash
-cargo build --release
-```
-
-## Running During Development
-
-```bash
-cargo run
-```
-
-Pass arguments after `--`:
+Run locally during development:
 
 ```bash
 cargo run -- -l
-```
-
-Examples:
-
-```bash
-cargo run -- -a "curl https://example.com"
-cargo run -- github api
-cargo run -- --team platform -l
-cargo run -- --repo /path/to/shared-reqbib --team platform -l
-```
-
-## Installing Locally
-
-```bash
-cargo install --path .
-```
-
-## Development Checks
-
-Run the same checks used by CI:
-
-```bash
-cargo test
-cargo fmt --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo doc --no-deps --document-private-items
 ```
