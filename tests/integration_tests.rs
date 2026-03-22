@@ -1,8 +1,122 @@
 use assert_cmd::prelude::*;
 use predicates::prelude::*;
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::TempDir;
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
+fn write_config(
+    config_path: &Path,
+    github_repo: Option<&str>,
+    shared_repo: Option<&Path>,
+    teams_dir: &str,
+    auto_update_repo: Option<bool>,
+) {
+    let mut config = serde_json::Map::new();
+    if let Some(github_repo) = github_repo {
+        config.insert(
+            "github_repo".to_string(),
+            serde_json::Value::String(github_repo.to_string()),
+        );
+    }
+    if let Some(shared_repo) = shared_repo {
+        config.insert(
+            "shared_repo_path".to_string(),
+            serde_json::to_value(shared_repo).unwrap(),
+        );
+    }
+    config.insert(
+        "teams_dir".to_string(),
+        serde_json::Value::String(teams_dir.to_string()),
+    );
+    if let Some(auto_update_repo) = auto_update_repo {
+        config.insert(
+            "auto_update_repo".to_string(),
+            serde_json::Value::Bool(auto_update_repo),
+        );
+    }
+
+    fs::write(
+        config_path,
+        serde_json::to_string_pretty(&serde_json::Value::Object(config)).unwrap(),
+    )
+    .unwrap();
+}
+
+fn write_mock_gh(temp_dir: &Path) -> (PathBuf, PathBuf) {
+    let log_path = temp_dir.join("gh.log");
+    let gh_path = if cfg!(windows) {
+        temp_dir.join("gh.cmd")
+    } else {
+        temp_dir.join("gh")
+    };
+
+    let script = if cfg!(windows) {
+        format!(
+            "@echo off\r\n\
+setlocal\r\n\
+echo %* > \"{}\"\r\n\
+mkdir \"%4\" >nul 2>nul\r\n",
+            log_path.display()
+        )
+    } else {
+        format!(
+            "#!/bin/sh\n\
+printf '%s\\n' \"$@\" > \"{}\"\n\
+mkdir -p \"$4\"\n",
+            log_path.display()
+        )
+    };
+
+    fs::write(&gh_path, script).unwrap();
+
+    #[cfg(unix)]
+    {
+        let mut permissions = fs::metadata(&gh_path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&gh_path, permissions).unwrap();
+    }
+
+    (gh_path, log_path)
+}
+
+fn write_mock_git(temp_dir: &Path) -> (PathBuf, PathBuf) {
+    let log_path = temp_dir.join("git.log");
+    let git_path = if cfg!(windows) {
+        temp_dir.join("git.cmd")
+    } else {
+        temp_dir.join("git")
+    };
+
+    let script = if cfg!(windows) {
+        format!(
+            "@echo off\r\n\
+setlocal\r\n\
+echo %* > \"{}\"\r\n",
+            log_path.display()
+        )
+    } else {
+        format!(
+            "#!/bin/sh\n\
+printf '%s\\n' \"$@\" > \"{}\"\n",
+            log_path.display()
+        )
+    };
+
+    fs::write(&git_path, script).unwrap();
+
+    #[cfg(unix)]
+    {
+        let mut permissions = fs::metadata(&git_path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&git_path, permissions).unwrap();
+    }
+
+    (git_path, log_path)
+}
 
 #[test]
 fn test_help_output() {
@@ -15,7 +129,12 @@ fn test_help_output() {
         .stdout(predicate::str::contains("Usage: reqbib"))
         .stdout(predicate::str::contains("--add"))
         .stdout(predicate::str::contains("--import"))
-        .stdout(predicate::str::contains("--list"));
+        .stdout(predicate::str::contains("--list"))
+        .stdout(predicate::str::contains("--config"))
+        .stdout(predicate::str::contains("--repo"))
+        .stdout(predicate::str::contains("--teams-dir"))
+        .stdout(predicate::str::contains("--team"))
+        .stdout(predicate::str::contains("--all-teams"));
 }
 
 #[test]
@@ -370,5 +489,511 @@ fn test_list_with_filter_no_results() {
 
     cmd.assert().success().stdout(predicate::str::contains(
         "No curl commands found matching keywords: nonexistent",
+    ));
+}
+
+#[test]
+fn test_add_command_to_team_repository() {
+    let temp_dir = TempDir::new().unwrap();
+    let shared_repo = temp_dir.path().join("shared-reqbib");
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+
+    cmd.arg("--repo")
+        .arg(&shared_repo)
+        .arg("--team")
+        .arg("platform")
+        .arg("--add")
+        .arg("curl https://api.example.com/platform");
+
+    cmd.assert().success().stdout(predicate::str::contains(
+        "Added curl command: curl https://api.example.com/platform",
+    ));
+
+    let data_file = shared_repo
+        .join("teams")
+        .join("platform")
+        .join("commands.json");
+    assert!(data_file.exists());
+
+    let content = fs::read_to_string(data_file).unwrap();
+    assert!(content.contains("curl https://api.example.com/platform"));
+}
+
+#[test]
+fn test_team_repository_storage_is_isolated_per_team() {
+    let temp_dir = TempDir::new().unwrap();
+    let shared_repo = temp_dir.path().join("shared-reqbib");
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.arg("--repo")
+        .arg(&shared_repo)
+        .arg("--team")
+        .arg("platform")
+        .arg("--add")
+        .arg("curl https://api.example.com/platform");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.arg("--repo")
+        .arg(&shared_repo)
+        .arg("--team")
+        .arg("payments")
+        .arg("--add")
+        .arg("curl https://api.example.com/payments");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.arg("--repo")
+        .arg(&shared_repo)
+        .arg("--team")
+        .arg("platform")
+        .arg("--list");
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("api.example.com/platform"))
+        .stdout(predicate::str::contains("api.example.com/payments").not());
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.arg("--repo")
+        .arg(&shared_repo)
+        .arg("--team")
+        .arg("payments")
+        .arg("--list");
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("api.example.com/payments"))
+        .stdout(predicate::str::contains("api.example.com/platform").not());
+}
+
+#[test]
+fn test_invalid_team_name_fails() {
+    let temp_dir = TempDir::new().unwrap();
+    let shared_repo = temp_dir.path().join("shared-reqbib");
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+
+    cmd.arg("--repo")
+        .arg(&shared_repo)
+        .arg("--team")
+        .arg("../platform")
+        .arg("--list");
+
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "Team names may only contain letters, numbers, dots, underscores, and hyphens.",
+    ));
+}
+
+#[test]
+fn test_team_repository_uses_default_config() {
+    let temp_dir = TempDir::new().unwrap();
+    let home_dir = temp_dir.path();
+    let shared_repo = home_dir.join("shared-reqbib");
+    let reqbib_dir = home_dir.join(".reqbib");
+    let config_path = reqbib_dir.join("config.json");
+
+    fs::create_dir_all(&reqbib_dir).unwrap();
+    write_config(
+        &config_path,
+        Some("acme/shared-reqbib"),
+        Some(&shared_repo),
+        "company-teams",
+        None,
+    );
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", home_dir);
+    cmd.arg("--team")
+        .arg("platform")
+        .arg("--add")
+        .arg("curl https://api.example.com/platform");
+
+    cmd.assert().success();
+
+    let data_file = shared_repo
+        .join("company-teams")
+        .join("platform")
+        .join("commands.json");
+    assert!(data_file.exists());
+}
+
+#[test]
+fn test_cli_repo_overrides_configured_repo() {
+    let temp_dir = TempDir::new().unwrap();
+    let home_dir = temp_dir.path();
+    let configured_repo = home_dir.join("configured-repo");
+    let override_repo = home_dir.join("override-repo");
+    let reqbib_dir = home_dir.join(".reqbib");
+    let config_path = reqbib_dir.join("config.json");
+
+    fs::create_dir_all(&reqbib_dir).unwrap();
+    write_config(
+        &config_path,
+        Some("acme/shared-reqbib"),
+        Some(&configured_repo),
+        "company-teams",
+        None,
+    );
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", home_dir);
+    cmd.arg("--repo")
+        .arg(&override_repo)
+        .arg("--team")
+        .arg("platform")
+        .arg("--add")
+        .arg("curl https://api.example.com/platform");
+
+    cmd.assert().success();
+
+    assert!(override_repo
+        .join("company-teams")
+        .join("platform")
+        .join("commands.json")
+        .exists());
+    assert!(!configured_repo
+        .join("company-teams")
+        .join("platform")
+        .join("commands.json")
+        .exists());
+}
+
+#[test]
+fn test_cli_teams_dir_overrides_configured_teams_dir() {
+    let temp_dir = TempDir::new().unwrap();
+    let home_dir = temp_dir.path();
+    let shared_repo = home_dir.join("shared-reqbib");
+    let reqbib_dir = home_dir.join(".reqbib");
+    let config_path = reqbib_dir.join("config.json");
+
+    fs::create_dir_all(&reqbib_dir).unwrap();
+    write_config(
+        &config_path,
+        Some("acme/shared-reqbib"),
+        Some(&shared_repo),
+        "company-teams",
+        None,
+    );
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", home_dir);
+    cmd.arg("--team")
+        .arg("platform")
+        .arg("--teams-dir")
+        .arg("custom-teams")
+        .arg("--add")
+        .arg("curl https://api.example.com/platform");
+
+    cmd.assert().success();
+
+    assert!(shared_repo
+        .join("custom-teams")
+        .join("platform")
+        .join("commands.json")
+        .exists());
+    assert!(!shared_repo
+        .join("company-teams")
+        .join("platform")
+        .join("commands.json")
+        .exists());
+}
+
+#[test]
+fn test_repo_without_team_fails() {
+    let temp_dir = TempDir::new().unwrap();
+    let shared_repo = temp_dir.path().join("shared-reqbib");
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+
+    cmd.arg("--repo").arg(&shared_repo).arg("--list");
+
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "--repo requires --team when using shared repository mode.",
+    ));
+}
+
+#[test]
+fn test_team_without_repo_or_config_fails() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+
+    cmd.env("HOME", temp_dir.path())
+        .arg("--team")
+        .arg("platform")
+        .arg("--list");
+
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "No shared repository configured. Use --repo, set shared_repo_path in config, or configure github_repo for gh-based checkout.",
+    ));
+}
+
+#[test]
+fn test_team_repository_uses_github_repo_config_with_gh_clone() {
+    let temp_dir = TempDir::new().unwrap();
+    let home_dir = temp_dir.path();
+    let reqbib_dir = home_dir.join(".reqbib");
+    let config_path = reqbib_dir.join("config.json");
+    let (gh_path, gh_log) = write_mock_gh(home_dir);
+
+    fs::create_dir_all(&reqbib_dir).unwrap();
+    write_config(
+        &config_path,
+        Some("acme/shared-reqbib"),
+        None,
+        "company-teams",
+        None,
+    );
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", home_dir)
+        .env("REQBIB_GH_BIN", &gh_path)
+        .arg("--team")
+        .arg("platform")
+        .arg("--add")
+        .arg("curl https://api.example.com/platform");
+
+    cmd.assert().success();
+
+    let checkout_root = home_dir
+        .join(".reqbib")
+        .join("repos")
+        .join("acme__shared-reqbib");
+    let data_file = checkout_root
+        .join("company-teams")
+        .join("platform")
+        .join("commands.json");
+    assert!(data_file.exists());
+
+    let gh_args = fs::read_to_string(gh_log).unwrap();
+    assert!(gh_args.contains("repo"));
+    assert!(gh_args.contains("clone"));
+    assert!(gh_args.contains("acme/shared-reqbib"));
+}
+
+#[test]
+fn test_existing_github_checkout_skips_gh_clone() {
+    let temp_dir = TempDir::new().unwrap();
+    let home_dir = temp_dir.path();
+    let reqbib_dir = home_dir.join(".reqbib");
+    let config_path = reqbib_dir.join("config.json");
+    let checkout_root = home_dir
+        .join(".reqbib")
+        .join("repos")
+        .join("acme__shared-reqbib");
+    let gh_log = home_dir.join("gh.log");
+
+    fs::create_dir_all(&reqbib_dir).unwrap();
+    fs::create_dir_all(&checkout_root).unwrap();
+    write_config(
+        &config_path,
+        Some("acme/shared-reqbib"),
+        None,
+        "company-teams",
+        None,
+    );
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", home_dir)
+        .env("REQBIB_GH_BIN", home_dir.join("missing-gh"))
+        .arg("--team")
+        .arg("platform")
+        .arg("--add")
+        .arg("curl https://api.example.com/platform");
+
+    cmd.assert().success();
+
+    assert!(checkout_root
+        .join("company-teams")
+        .join("platform")
+        .join("commands.json")
+        .exists());
+    assert!(!gh_log.exists());
+}
+
+#[test]
+fn test_existing_github_checkout_auto_updates_with_git() {
+    let temp_dir = TempDir::new().unwrap();
+    let home_dir = temp_dir.path();
+    let reqbib_dir = home_dir.join(".reqbib");
+    let config_path = reqbib_dir.join("config.json");
+    let checkout_root = home_dir
+        .join(".reqbib")
+        .join("repos")
+        .join("acme__shared-reqbib");
+    let company_teams = checkout_root.join("company-teams");
+    let (git_path, git_log) = write_mock_git(home_dir);
+
+    fs::create_dir_all(&reqbib_dir).unwrap();
+    fs::create_dir_all(&company_teams).unwrap();
+    write_config(
+        &config_path,
+        Some("acme/shared-reqbib"),
+        None,
+        "company-teams",
+        Some(true),
+    );
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", home_dir)
+        .env("REQBIB_GIT_BIN", &git_path)
+        .arg("--team")
+        .arg("platform")
+        .arg("--list");
+
+    cmd.assert().success();
+
+    let git_args = fs::read_to_string(git_log).unwrap();
+    assert!(git_args.contains("pull"));
+    assert!(git_args.contains("--ff-only"));
+}
+
+#[test]
+fn test_existing_github_checkout_can_disable_auto_update() {
+    let temp_dir = TempDir::new().unwrap();
+    let home_dir = temp_dir.path();
+    let reqbib_dir = home_dir.join(".reqbib");
+    let config_path = reqbib_dir.join("config.json");
+    let checkout_root = home_dir
+        .join(".reqbib")
+        .join("repos")
+        .join("acme__shared-reqbib");
+    let company_teams = checkout_root.join("company-teams");
+    let git_log = home_dir.join("git.log");
+
+    fs::create_dir_all(&reqbib_dir).unwrap();
+    fs::create_dir_all(&company_teams).unwrap();
+    write_config(
+        &config_path,
+        Some("acme/shared-reqbib"),
+        None,
+        "company-teams",
+        Some(false),
+    );
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", home_dir)
+        .env("REQBIB_GIT_BIN", home_dir.join("missing-git"))
+        .arg("--team")
+        .arg("platform")
+        .arg("--list");
+
+    cmd.assert().success();
+
+    assert!(!git_log.exists());
+}
+
+#[test]
+fn test_list_across_all_teams() {
+    let temp_dir = TempDir::new().unwrap();
+    let shared_repo = temp_dir.path().join("shared-reqbib");
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.arg("--repo")
+        .arg(&shared_repo)
+        .arg("--team")
+        .arg("platform")
+        .arg("--add")
+        .arg("curl https://api.example.com/platform");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.arg("--repo")
+        .arg(&shared_repo)
+        .arg("--team")
+        .arg("payments")
+        .arg("--add")
+        .arg("curl https://api.example.com/payments");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.arg("--repo")
+        .arg(&shared_repo)
+        .arg("--all-teams")
+        .arg("--list");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "All stored curl commands across teams (2):",
+        ))
+        .stdout(predicate::str::contains(
+            "[platform] curl https://api.example.com/platform",
+        ))
+        .stdout(predicate::str::contains(
+            "[payments] curl https://api.example.com/payments",
+        ));
+}
+
+#[test]
+fn test_search_across_all_teams() {
+    let temp_dir = TempDir::new().unwrap();
+    let shared_repo = temp_dir.path().join("shared-reqbib");
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.arg("--repo")
+        .arg(&shared_repo)
+        .arg("--team")
+        .arg("platform")
+        .arg("--add")
+        .arg("curl https://api.example.com/shared/health");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.arg("--repo")
+        .arg(&shared_repo)
+        .arg("--team")
+        .arg("payments")
+        .arg("--add")
+        .arg("curl https://api.example.com/shared/webhook");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.arg("--repo")
+        .arg(&shared_repo)
+        .arg("--all-teams")
+        .arg("shared");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Found 2 matching curl command(s) across teams:",
+        ))
+        .stdout(predicate::str::contains(
+            "[platform] curl https://api.example.com/shared/health",
+        ))
+        .stdout(predicate::str::contains(
+            "[payments] curl https://api.example.com/shared/webhook",
+        ));
+}
+
+#[test]
+fn test_team_and_all_teams_conflict() {
+    let temp_dir = TempDir::new().unwrap();
+    let shared_repo = temp_dir.path().join("shared-reqbib");
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+
+    cmd.arg("--repo")
+        .arg(&shared_repo)
+        .arg("--team")
+        .arg("platform")
+        .arg("--all-teams")
+        .arg("--list");
+
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "--team cannot be used together with --all-teams.",
+    ));
+}
+
+#[test]
+fn test_add_with_all_teams_fails() {
+    let temp_dir = TempDir::new().unwrap();
+    let shared_repo = temp_dir.path().join("shared-reqbib");
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+
+    cmd.arg("--repo")
+        .arg(&shared_repo)
+        .arg("--all-teams")
+        .arg("--add")
+        .arg("curl https://api.example.com/platform");
+
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "--all-teams cannot be used with --add.",
     ));
 }
