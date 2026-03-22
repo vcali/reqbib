@@ -126,6 +126,7 @@ Pushes to `main` publish a GitHub Release automatically.
 - Release assets currently include:
   - `reqbib-x86_64-unknown-linux-gnu.tar.gz`
   - `reqbib-x86_64-apple-darwin.tar.gz`
+  - `reqbib-aarch64-apple-darwin.tar.gz`
   - matching `.sha256` checksum files
 
 ## Sensitive Data
