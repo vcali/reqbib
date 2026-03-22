@@ -1,4 +1,4 @@
-use crate::database::CurlDatabase;
+use crate::database::{CurlCommand, CurlDatabase};
 use crate::github::{
     ensure_github_repo_checkout, get_default_github_state_root, maybe_update_github_repo_checkout,
     validate_github_repo_name, write_github_repo_sync_stamp,
@@ -25,7 +25,7 @@ const LEGACY_SHARED_REPO_CONFIG_KEYS: &[&str] = &[
 #[derive(Debug, Default, Clone, PartialEq)]
 pub(crate) struct ReqbibConfig {
     pub(crate) shared_repo: Option<SharedRepoConfig>,
-    pub(crate) default_read_scope: Option<ReadScopePreference>,
+    pub(crate) default_list_limit: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -38,6 +38,8 @@ pub(crate) enum SharedRepoConfig {
 pub(crate) struct PathSharedRepoConfig {
     pub(crate) path: PathBuf,
     pub(crate) teams_dir: Option<PathBuf>,
+    pub(crate) default_team: Option<String>,
+    pub(crate) default_all_teams: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -46,6 +48,8 @@ pub(crate) struct GithubSharedRepoConfig {
     pub(crate) teams_dir: Option<PathBuf>,
     pub(crate) auto_update_repo: bool,
     pub(crate) auto_update_interval_minutes: u64,
+    pub(crate) default_team: Option<String>,
+    pub(crate) default_all_teams: bool,
 }
 
 #[derive(Deserialize)]
@@ -53,7 +57,7 @@ pub(crate) struct GithubSharedRepoConfig {
 struct RawReqbibConfig {
     #[serde(default)]
     shared_repo: Option<RawSharedRepoConfig>,
-    default_read_scope: Option<String>,
+    default_list_limit: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -65,6 +69,8 @@ struct RawSharedRepoConfig {
     teams_dir: Option<PathBuf>,
     auto_update_repo: Option<bool>,
     auto_update_interval_minutes: Option<u64>,
+    default_team: Option<String>,
+    default_all_teams: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -73,11 +79,10 @@ pub(crate) struct SharedStorageContext {
     pub(crate) teams_dir: PathBuf,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ReadScopePreference {
-    Combined,
-    Local,
-    Shared,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DefaultSharedReadTarget {
+    Team(String),
+    AllTeams,
 }
 
 impl ReqbibConfig {
@@ -103,6 +108,12 @@ impl ReqbibConfig {
         validate_relative_directory(&teams_dir)?;
         Ok(teams_dir)
     }
+
+    pub(crate) fn default_shared_read_target(&self) -> Option<DefaultSharedReadTarget> {
+        self.shared_repo
+            .as_ref()
+            .and_then(SharedRepoConfig::default_shared_read_target)
+    }
 }
 
 impl SharedRepoConfig {
@@ -111,6 +122,28 @@ impl SharedRepoConfig {
             SharedRepoConfig::Path(config) => config.teams_dir.as_ref(),
             SharedRepoConfig::Github(config) => config.teams_dir.as_ref(),
         }
+    }
+
+    fn default_shared_read_target(&self) -> Option<DefaultSharedReadTarget> {
+        match self {
+            SharedRepoConfig::Path(config) => {
+                default_shared_read_target(config.default_team.as_deref(), config.default_all_teams)
+            }
+            SharedRepoConfig::Github(config) => {
+                default_shared_read_target(config.default_team.as_deref(), config.default_all_teams)
+            }
+        }
+    }
+}
+
+fn default_shared_read_target(
+    default_team: Option<&str>,
+    default_all_teams: bool,
+) -> Option<DefaultSharedReadTarget> {
+    if default_all_teams {
+        Some(DefaultSharedReadTarget::AllTeams)
+    } else {
+        default_team.map(|team| DefaultSharedReadTarget::Team(team.to_string()))
     }
 }
 
@@ -128,38 +161,11 @@ impl TryFrom<RawReqbibConfig> for ReqbibConfig {
             Some(shared_repo) => Some(SharedRepoConfig::try_from(shared_repo)?),
             None => None,
         };
-        let default_read_scope = match value.default_read_scope {
-            Some(scope) => Some(ReadScopePreference::try_from(scope.as_str())?),
-            None => None,
-        };
-
-        if matches!(
-            default_read_scope,
-            Some(ReadScopePreference::Shared | ReadScopePreference::Combined)
-        ) && shared_repo.is_none()
-        {
-            return Err(
-                "default_read_scope requires shared_repo to be configured for shared reads.".into(),
-            );
-        }
 
         Ok(Self {
             shared_repo,
-            default_read_scope,
+            default_list_limit: value.default_list_limit,
         })
-    }
-}
-
-impl TryFrom<&str> for ReadScopePreference {
-    type Error = Box<dyn std::error::Error>;
-
-    fn try_from(value: &str) -> Result<Self> {
-        match value {
-            "combined" => Ok(Self::Combined),
-            "local" => Ok(Self::Local),
-            "shared" => Ok(Self::Shared),
-            _ => Err("default_read_scope must be one of 'combined', 'local', or 'shared'.".into()),
-        }
     }
 }
 
@@ -169,6 +175,18 @@ impl TryFrom<RawSharedRepoConfig> for SharedRepoConfig {
     fn try_from(value: RawSharedRepoConfig) -> Result<Self> {
         if let Some(teams_dir) = value.teams_dir.as_ref() {
             validate_relative_directory(teams_dir)?;
+        }
+
+        if let Some(default_team) = value.default_team.as_deref() {
+            validate_team_name(default_team)?;
+        }
+
+        let default_all_teams = value.default_all_teams.unwrap_or(false);
+        if default_all_teams && value.default_team.is_some() {
+            return Err(
+                "shared_repo.default_team cannot be combined with shared_repo.default_all_teams."
+                    .into(),
+            );
         }
 
         match value.mode.as_str() {
@@ -205,6 +223,8 @@ impl TryFrom<RawSharedRepoConfig> for SharedRepoConfig {
                 Ok(SharedRepoConfig::Path(PathSharedRepoConfig {
                     path,
                     teams_dir: value.teams_dir,
+                    default_team: value.default_team,
+                    default_all_teams,
                 }))
             }
             "github" => {
@@ -235,6 +255,8 @@ impl TryFrom<RawSharedRepoConfig> for SharedRepoConfig {
                     teams_dir: value.teams_dir,
                     auto_update_repo: value.auto_update_repo.unwrap_or(true),
                     auto_update_interval_minutes,
+                    default_team: value.default_team,
+                    default_all_teams,
                 }))
             }
             _ => Err("shared_repo.mode must be either 'path' or 'github'.".into()),
@@ -415,7 +437,7 @@ pub(crate) fn resolve_data_file_path(
 pub(crate) fn load_all_team_commands(
     shared_context: &SharedStorageContext,
     keywords: Option<&[String]>,
-) -> Result<Vec<(String, String)>> {
+) -> Result<Vec<(String, CurlCommand)>> {
     let teams_root = shared_context
         .repository_root
         .join(&shared_context.teams_dir);
@@ -447,18 +469,36 @@ pub(crate) fn load_all_team_commands(
         match keywords {
             Some(keywords) => {
                 for command in database.search(keywords) {
-                    results.push((team_name.clone(), command.command.clone()));
+                    results.push((team_name.clone(), command.clone()));
                 }
             }
             None => {
                 for command in database.commands {
-                    results.push((team_name.clone(), command.command));
+                    results.push((team_name.clone(), command));
                 }
             }
         }
     }
 
     Ok(results)
+}
+
+pub(crate) fn load_team_commands(
+    shared_context: &SharedStorageContext,
+    team: &str,
+    keywords: Option<&[String]>,
+) -> Result<Vec<CurlCommand>> {
+    let team_path = get_team_data_file_path(
+        &shared_context.repository_root,
+        &shared_context.teams_dir,
+        team,
+    )?;
+    let database = CurlDatabase::load_from_file(&team_path)?;
+
+    Ok(match keywords {
+        Some(keywords) => database.search(keywords).into_iter().cloned().collect(),
+        None => database.commands,
+    })
 }
 
 pub(crate) fn shared_repository_required_message() -> &'static str {
@@ -469,8 +509,8 @@ pub(crate) fn shared_repository_required_message() -> &'static str {
 mod tests {
     use super::{
         get_team_data_file_path, resolve_data_file_path, resolve_shared_storage_context,
-        validate_relative_directory, GithubSharedRepoConfig, PathSharedRepoConfig,
-        ReadScopePreference, ReqbibConfig, SharedRepoConfig,
+        validate_relative_directory, DefaultSharedReadTarget, GithubSharedRepoConfig,
+        PathSharedRepoConfig, ReqbibConfig, SharedRepoConfig,
     };
     use crate::cli::build_cli;
     use crate::github::DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES;
@@ -571,8 +611,10 @@ mod tests {
                 shared_repo: Some(SharedRepoConfig::Path(PathSharedRepoConfig {
                     path: PathBuf::from("/tmp/shared-reqbib"),
                     teams_dir: Some(PathBuf::from("company-teams")),
+                    default_team: None,
+                    default_all_teams: false,
                 })),
-                default_read_scope: None,
+                default_list_limit: None,
             }
         );
     }
@@ -600,67 +642,71 @@ mod tests {
                     teams_dir: None,
                     auto_update_repo: true,
                     auto_update_interval_minutes: DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES,
+                    default_team: None,
+                    default_all_teams: false,
                 })),
-                default_read_scope: None,
+                default_list_limit: None,
             }
         );
     }
 
     #[test]
-    fn test_load_config_with_default_read_scope() {
+    fn test_load_config_with_default_team() {
         let temp_dir = TempDir::new().unwrap();
         let config_path = write_config_file(
             &temp_dir,
             serde_json::json!({
                 "shared_repo": {
                     "mode": "path",
-                    "path": "/tmp/shared-reqbib"
+                    "path": "/tmp/shared-reqbib",
+                    "default_team": "platform"
                 },
-                "default_read_scope": "shared"
             }),
         );
 
         let config = ReqbibConfig::load_from_file(&config_path).unwrap();
 
-        assert_eq!(config.default_read_scope, Some(ReadScopePreference::Shared));
-    }
-
-    #[test]
-    fn test_load_config_rejects_invalid_default_read_scope() {
-        let temp_dir = TempDir::new().unwrap();
-        let config_path = write_config_file(
-            &temp_dir,
-            serde_json::json!({
-                "default_read_scope": "everything"
-            }),
-        );
-
-        let error = ReqbibConfig::load_from_file(&config_path)
-            .expect_err("invalid read scope should be rejected");
-
         assert_eq!(
-            error.to_string(),
-            "default_read_scope must be one of 'combined', 'local', or 'shared'."
+            config.default_shared_read_target(),
+            Some(DefaultSharedReadTarget::Team("platform".to_string()))
         );
     }
 
     #[test]
-    fn test_load_config_rejects_shared_default_read_scope_without_shared_repo() {
+    fn test_load_config_with_default_all_teams() {
         let temp_dir = TempDir::new().unwrap();
         let config_path = write_config_file(
             &temp_dir,
             serde_json::json!({
-                "default_read_scope": "shared"
+                "shared_repo": {
+                    "mode": "path",
+                    "path": "/tmp/shared-reqbib",
+                    "default_all_teams": true
+                }
             }),
         );
 
-        let error = ReqbibConfig::load_from_file(&config_path)
-            .expect_err("shared scope requires shared repo config");
+        let config = ReqbibConfig::load_from_file(&config_path).unwrap();
 
         assert_eq!(
-            error.to_string(),
-            "default_read_scope requires shared_repo to be configured for shared reads."
+            config.default_shared_read_target(),
+            Some(DefaultSharedReadTarget::AllTeams)
         );
+    }
+
+    #[test]
+    fn test_load_config_with_default_list_limit() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = write_config_file(
+            &temp_dir,
+            serde_json::json!({
+                "default_list_limit": 12
+            }),
+        );
+
+        let config = ReqbibConfig::load_from_file(&config_path).unwrap();
+
+        assert_eq!(config.default_list_limit, Some(12));
     }
 
     #[test]
@@ -794,6 +840,53 @@ mod tests {
     }
 
     #[test]
+    fn test_load_config_rejects_default_team_with_default_all_teams() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = write_config_file(
+            &temp_dir,
+            serde_json::json!({
+                "shared_repo": {
+                    "mode": "path",
+                    "path": "/tmp/shared-reqbib",
+                    "default_team": "platform",
+                    "default_all_teams": true
+                }
+            }),
+        );
+
+        let error = ReqbibConfig::load_from_file(&config_path)
+            .expect_err("conflicting default shared read selectors should be rejected");
+
+        assert_eq!(
+            error.to_string(),
+            "shared_repo.default_team cannot be combined with shared_repo.default_all_teams."
+        );
+    }
+
+    #[test]
+    fn test_load_config_rejects_invalid_default_team() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = write_config_file(
+            &temp_dir,
+            serde_json::json!({
+                "shared_repo": {
+                    "mode": "path",
+                    "path": "/tmp/shared-reqbib",
+                    "default_team": "../platform"
+                }
+            }),
+        );
+
+        let error = ReqbibConfig::load_from_file(&config_path)
+            .expect_err("invalid team names should be rejected");
+
+        assert_eq!(
+            error.to_string(),
+            "Team names may only contain letters, numbers, dots, underscores, and hyphens."
+        );
+    }
+
+    #[test]
     fn test_config_teams_dir_defaults_to_teams() {
         let config = ReqbibConfig::default();
 
@@ -806,8 +899,10 @@ mod tests {
             shared_repo: Some(SharedRepoConfig::Path(PathSharedRepoConfig {
                 path: PathBuf::from("/tmp/shared-reqbib"),
                 teams_dir: Some(PathBuf::from("../teams")),
+                default_team: None,
+                default_all_teams: false,
             })),
-            default_read_scope: None,
+            default_list_limit: None,
         };
 
         let error = config
@@ -866,8 +961,10 @@ mod tests {
             shared_repo: Some(SharedRepoConfig::Path(PathSharedRepoConfig {
                 path: PathBuf::from("/tmp/shared-reqbib"),
                 teams_dir: Some(PathBuf::from("company-teams")),
+                default_team: None,
+                default_all_teams: false,
             })),
-            default_read_scope: None,
+            default_list_limit: None,
         };
 
         let shared_context = resolve_shared_storage_context(&matches, &config).unwrap();
@@ -901,8 +998,10 @@ mod tests {
             shared_repo: Some(SharedRepoConfig::Path(PathSharedRepoConfig {
                 path: PathBuf::from("/tmp/shared-reqbib"),
                 teams_dir: Some(PathBuf::from("company-teams")),
+                default_team: None,
+                default_all_teams: false,
             })),
-            default_read_scope: None,
+            default_list_limit: None,
         };
 
         let shared_context = resolve_shared_storage_context(&matches, &config).unwrap();

@@ -12,6 +12,12 @@ pub(crate) fn build_cli() -> Command {
                 .help("Add a new curl command"),
         )
         .arg(
+            Arg::new("description")
+                .long("description")
+                .value_name("TEXT")
+                .help("Optional brief description for --add"),
+        )
+        .arg(
             Arg::new("import")
                 .short('i')
                 .long("import")
@@ -24,6 +30,13 @@ pub(crate) fn build_cli() -> Command {
                 .long("list")
                 .help("List all stored curl commands")
                 .action(clap::ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("limit")
+                .long("limit")
+                .value_name("COUNT")
+                .value_parser(clap::value_parser!(usize))
+                .help("Limit how many commands are shown with --list (0 means unlimited)"),
         )
         .arg(
             Arg::new("config")

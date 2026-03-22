@@ -26,7 +26,7 @@ At a high level, execution is:
 2. Load config from `~/.reqbib/config.json` or `--config`.
 3. Resolve local or shared storage context from the nested `shared_repo` config or CLI overrides.
 4. For GitHub-backed shared mode, ensure a local checkout exists and refresh it if due.
-5. For default read commands, merge local and shared results when `shared_repo` is configured unless scope is overridden by CLI flags or config.
+5. For default read commands, use local-only, local plus the configured default team, or local plus all teams depending on config and CLI overrides.
 6. Execute one of the user operations:
    - add
    - import
@@ -53,6 +53,7 @@ Shared storage:
 Each entry stores:
 
 - the original command string
+- an optional short description
 - the extracted keyword list
 
 ## Search Indexing
@@ -62,9 +63,10 @@ Search works by precomputing keywords when commands are added or imported.
 Current indexing behavior:
 
 - regexes are compiled once and reused
+- description text is folded into the stored keyword set when present
 - stored keywords are normalized to lowercase
 - search keywords are normalized once per query
-- fallback substring matching still checks the full command text
+- fallback substring matching checks the full command text and the optional description
 
 This is still a simple in-memory scan over JSON-backed records. It is acceptable for the current scale, but larger shared repositories may eventually need a different storage or indexing strategy.
 
@@ -125,15 +127,20 @@ The main planned gaps relevant to maintainers are:
 
 ## Read Scope
 
-Default read commands can operate in three scopes:
+Default read commands can operate in these modes:
 
 - `local`
-- `shared`
-- `combined`
+- `local + default team`
+- `local + all teams`
+- `shared only` via the configured default shared target
 
 Current behavior:
 
-- if `shared_repo` is configured, non-team list/search defaults to `combined`
+- if `shared_repo.default_team` is configured, non-team list/search defaults to local plus that team
+- if `shared_repo.default_all_teams` is `true`, non-team list/search defaults to local plus all teams
+- otherwise non-team list/search defaults to local only
 - `--local-only` and `--shared-only` override that behavior
-- `default_read_scope` in config can change the default for non-team reads
 - `--team` and `--all-teams` stay explicit shared-only modes
+- local entries that exactly duplicate displayed shared entries are hidden from the default combined output
+- `--list` uses a default result cap unless `default_list_limit` or `--limit` overrides it
+- output uses plain `=== ... ===` section banners with multiline-safe entry blocks, and descriptions render inline after the bracketed index when present

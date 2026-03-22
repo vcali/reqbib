@@ -7,10 +7,11 @@ The name comes from **Requests Biblioteca**: a library of useful HTTP requests f
 ## Highlights
 
 - Store `curl` commands locally in `~/.reqbib/commands.json`
+- Add an optional short description to each stored command
 - Import commands from shell history with `-i`
 - Search by extracted keywords instead of exact text only
 - Use a shared team repository layout with GitHub-backed checkouts
-- Search local and shared commands together by default when `shared_repo` is configured
+- Add a default shared team so normal search and list commands can include local plus your team
 - Search across all teams in a shared repository with `--all-teams`
 
 ## Quick Start
@@ -21,13 +22,20 @@ Add a command locally:
 reqbib -a "curl -I https://api.github.com/users/octocat"
 ```
 
+Add a command with a short description:
+
+```bash
+reqbib -a "curl -I https://api.github.com/users/octocat" \
+  --description "Fetch the Octocat profile headers"
+```
+
 Search locally:
 
 ```bash
 reqbib github octocat
 ```
 
-If `shared_repo` is configured, that default search also includes shared team commands unless you pass `--local-only` or `--shared-only`.
+If `shared_repo.default_team` is configured, that default search includes local commands plus your team. Use `--local-only`, `--shared-only`, or `--all-teams` when you want a different scope.
 
 List everything:
 
@@ -69,17 +77,17 @@ Cross-team search:
 reqbib --repo /path/to/shared-reqbib --all-teams stripe webhook
 ```
 
-Default combined search output is grouped by source and preserves multiline commands:
+Default local-plus-team output is grouped by source and preserves multiline commands:
 
 ```text
-Local
+=== LOCAL ===
 
-[1]
+[1] Fetch Octocat profile
 curl https://api.github.com/users/octocat
 
-Shared / platform
+=== SHARED / PLATFORM ===
 
-[1]
+[1] Platform health check
 curl -X POST https://api.example.com/platform/health \
   -H "Authorization: Bearer $TOKEN"
 ```
@@ -97,9 +105,11 @@ Minimal GitHub-backed config:
     "mode": "github",
     "github_repo": "acme/shared-reqbib",
     "teams_dir": "teams",
+    "default_team": "platform",
     "auto_update_repo": true,
     "auto_update_interval_minutes": 15
-  }
+  },
+  "default_list_limit": 20
 }
 ```
 
