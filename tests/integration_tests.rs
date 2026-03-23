@@ -534,6 +534,49 @@ fn test_import_from_zsh_history() {
 }
 
 #[test]
+fn test_import_multiline_curl_from_zsh_history() {
+    let temp_dir = TempDir::new().unwrap();
+    let home_dir = temp_dir.path();
+
+    let zsh_history = home_dir.join(".zsh_history");
+    let history_content = r#": 1647875000:0;echo "before"
+: 1647875010:0;curl -X POST https://api.example.com/graphql \
+  -H "Content-Type: application/json" \
+  -d '{"query":"{ viewer { login } }"}'
+: 1647875020:0;echo "after""#;
+
+    fs::write(&zsh_history, history_content).unwrap();
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", home_dir).arg("--import");
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("Imported 1 new curl commands"));
+
+    let stored_commands =
+        fs::read_to_string(home_dir.join(".reqbib").join("commands.json")).unwrap();
+    assert!(stored_commands.contains("curl -X POST https://api.example.com/graphql\\n"));
+    assert!(stored_commands.contains("  -H \\\"Content-Type: application/json\\\"\\n"));
+    assert!(!stored_commands.contains("graphql \\\\\\\\"));
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", home_dir).arg("--list");
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "curl -X POST https://api.example.com/graphql",
+        ))
+        .stdout(predicate::str::contains(
+            "  -H \"Content-Type: application/json\"",
+        ))
+        .stdout(predicate::str::contains(
+            "  -d '{\"query\":\"{ viewer { login } }\"}'",
+        ))
+        .stdout(predicate::str::contains("graphql \\").not())
+        .stdout(predicate::str::contains("application/json\" \\").not());
+}
+
+#[test]
 fn test_duplicate_prevention() {
     let temp_dir = TempDir::new().unwrap();
 
