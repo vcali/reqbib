@@ -1,11 +1,10 @@
 use crate::cli::build_cli;
 use crate::config::{
-    load_all_team_commands, load_team_commands, resolve_config, resolve_data_file_path,
-    resolve_shared_storage_context, shared_repository_required_message, DefaultSharedReadTarget,
-    ReqbibConfig, SharedStorageContext,
+    load_all_team_commands, load_team_commands, resolve_active_biblioteca, resolve_config,
+    resolve_data_file_path, resolve_shared_storage_context, shared_repository_required_message,
+    CombibConfig, DefaultSharedReadTarget, SharedStorageContext,
 };
-use crate::database::{CurlCommand, CurlDatabase};
-use crate::history::import_from_history;
+use crate::database::{CommandDatabase, StoredCommand};
 use crate::Result;
 use std::collections::HashSet;
 
@@ -15,8 +14,8 @@ const DEFAULT_SHARED_SELECTION_REQUIRED_MESSAGE: &str =
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum OutputSectionSource {
-    Local,
-    SharedTeam(String),
+    Local { biblioteca: String },
+    SharedTeam { team: String, biblioteca: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,41 +50,52 @@ struct OutputSummary {
 }
 
 impl OutputSection {
-    fn local(entries: Vec<OutputEntry>) -> Self {
+    fn local(biblioteca: impl Into<String>, entries: Vec<OutputEntry>) -> Self {
         Self {
-            source: OutputSectionSource::Local,
+            source: OutputSectionSource::Local {
+                biblioteca: biblioteca.into(),
+            },
             entries,
         }
     }
 
-    fn shared_team(team: impl Into<String>, entries: Vec<OutputEntry>) -> Self {
+    fn shared_team(
+        team: impl Into<String>,
+        biblioteca: impl Into<String>,
+        entries: Vec<OutputEntry>,
+    ) -> Self {
         Self {
-            source: OutputSectionSource::SharedTeam(team.into()),
+            source: OutputSectionSource::SharedTeam {
+                team: team.into(),
+                biblioteca: biblioteca.into(),
+            },
             entries,
         }
     }
 
     fn title(&self) -> String {
         match &self.source {
-            OutputSectionSource::Local => "Local".to_string(),
-            OutputSectionSource::SharedTeam(team) => format!("Shared / {}", team),
+            OutputSectionSource::Local { biblioteca } => format!("Local / {biblioteca}"),
+            OutputSectionSource::SharedTeam { team, biblioteca } => {
+                format!("Shared / {team} / {biblioteca}")
+            }
         }
     }
 
     fn is_shared(&self) -> bool {
-        matches!(self.source, OutputSectionSource::SharedTeam(_))
+        matches!(self.source, OutputSectionSource::SharedTeam { .. })
     }
 }
 
 impl OutputEntry {
-    fn from_command(command: &CurlCommand) -> Self {
+    fn from_command(command: &StoredCommand) -> Self {
         Self {
             command: command.command.clone(),
             description: command.description.clone(),
         }
     }
 
-    fn from_owned_command(command: CurlCommand) -> Self {
+    fn from_owned_command(command: StoredCommand) -> Self {
         Self {
             command: command.command,
             description: command.description,
@@ -112,11 +122,166 @@ pub fn run() -> Result<()> {
 
     let matches = build_cli().get_matches();
     let config = resolve_config(&matches)?;
+    validate_matches(&matches)?;
+
+    let all_teams = matches.get_flag("all-teams");
+    let shared_context = resolve_shared_storage_context(&matches, &config)?;
+    let biblioteca = resolve_active_biblioteca(&matches, &config)?;
+    let data_file = resolve_data_file_path(&matches, shared_context.as_ref(), &biblioteca)?;
+
+    if let Some(command) = matches.get_one::<String>("add") {
+        let description = matches
+            .get_one::<String>("description")
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        let mut db = CommandDatabase::load_from_file(&data_file)?;
+        let added = db.add_command(command.clone(), description.clone());
+        if added {
+            db.save_to_file(&data_file)?;
+            match description {
+                Some(description) => {
+                    println!(
+                        "Added command to biblioteca '{biblioteca}': {command} ({description})"
+                    );
+                }
+                None => println!("Added command to biblioteca '{biblioteca}': {command}"),
+            }
+        } else {
+            println!("Command already exists in biblioteca '{biblioteca}'.");
+        }
+        return Ok(());
+    }
+
+    if matches.get_flag("list") {
+        let list_keywords: Option<Vec<String>> = matches
+            .get_many::<String>("keywords")
+            .map(|keywords| keywords.cloned().collect());
+        let limit = resolve_list_limit(&matches, &config);
+
+        if let Some(team) = matches.get_one::<String>("team") {
+            let commands = CommandDatabase::load_from_file(&data_file)?;
+            let mut sections = vec![OutputSection::shared_team(
+                team.clone(),
+                biblioteca.clone(),
+                filter_commands(&commands, list_keywords.as_deref()),
+            )];
+            let summary = OutputSummary {
+                hidden_due_to_limit: apply_list_limit(&mut sections, limit),
+                active_limit: limit,
+                ..OutputSummary::default()
+            };
+            print_sections(
+                &sections,
+                &empty_message(list_keywords.is_some(), &biblioteca),
+                &summary,
+            );
+            return Ok(());
+        }
+
+        if all_teams {
+            let mut sections = load_shared_sections_for_target(
+                shared_context
+                    .as_ref()
+                    .ok_or(shared_repository_required_message())?,
+                &SharedReadTarget::AllTeams,
+                &biblioteca,
+                list_keywords.as_deref(),
+            )?;
+            let summary = OutputSummary {
+                hidden_due_to_limit: apply_list_limit(&mut sections, limit),
+                active_limit: limit,
+                ..OutputSummary::default()
+            };
+            print_sections(
+                &sections,
+                &empty_message(list_keywords.is_some(), &biblioteca),
+                &summary,
+            );
+            return Ok(());
+        }
+
+        let local_db = CommandDatabase::load_from_file(&data_file)?;
+        let plan = resolve_default_read_plan(&matches, &config, shared_context.as_ref())?;
+        let (mut sections, hidden_local_duplicates) = load_default_read_sections(
+            &local_db,
+            shared_context.as_ref(),
+            &biblioteca,
+            list_keywords.as_deref(),
+            &plan,
+        )?;
+        let mut summary = OutputSummary {
+            hidden_local_duplicates,
+            hidden_due_to_limit: 0,
+            active_limit: limit,
+        };
+        summary.hidden_due_to_limit = apply_list_limit(&mut sections, limit);
+        print_sections(
+            &sections,
+            &empty_message(list_keywords.is_some(), &biblioteca),
+            &summary,
+        );
+        return Ok(());
+    }
+
+    if let Some(keywords) = matches.get_many::<String>("keywords") {
+        let keyword_vec: Vec<String> = keywords.cloned().collect();
+
+        if let Some(team) = matches.get_one::<String>("team") {
+            let commands = CommandDatabase::load_from_file(&data_file)?;
+            let sections = vec![OutputSection::shared_team(
+                team.clone(),
+                biblioteca.clone(),
+                filter_commands(&commands, Some(&keyword_vec)),
+            )];
+            print_sections(
+                &sections,
+                &empty_message(true, &biblioteca),
+                &OutputSummary::default(),
+            );
+            return Ok(());
+        }
+
+        if all_teams {
+            let sections = load_shared_sections_for_target(
+                shared_context
+                    .as_ref()
+                    .ok_or(shared_repository_required_message())?,
+                &SharedReadTarget::AllTeams,
+                &biblioteca,
+                Some(&keyword_vec),
+            )?;
+            print_sections(
+                &sections,
+                &empty_message(true, &biblioteca),
+                &OutputSummary::default(),
+            );
+            return Ok(());
+        }
+
+        let local_db = CommandDatabase::load_from_file(&data_file)?;
+        let plan = resolve_default_read_plan(&matches, &config, shared_context.as_ref())?;
+        let (sections, hidden_local_duplicates) = load_default_read_sections(
+            &local_db,
+            shared_context.as_ref(),
+            &biblioteca,
+            Some(&keyword_vec),
+            &plan,
+        )?;
+        let summary = OutputSummary {
+            hidden_local_duplicates,
+            hidden_due_to_limit: 0,
+            active_limit: None,
+        };
+        print_sections(&sections, &empty_message(true, &biblioteca), &summary);
+    }
+
+    Ok(())
+}
+
+fn validate_matches(matches: &clap::ArgMatches) -> Result<()> {
     let all_teams = matches.get_flag("all-teams");
     let local_only = matches.get_flag("local-only");
     let shared_only = matches.get_flag("shared-only");
-    let list_limit = matches.get_one::<usize>("limit").copied();
-    let shared_context = resolve_shared_storage_context(&matches, &config)?;
 
     if local_only && shared_only {
         return Err("--local-only cannot be used together with --shared-only.".into());
@@ -130,7 +295,7 @@ pub fn run() -> Result<()> {
         return Err("--local-only and --shared-only cannot be used with --all-teams.".into());
     }
 
-    if list_limit.is_some() && !matches.get_flag("list") {
+    if matches.get_one::<usize>("limit").is_some() && !matches.get_flag("list") {
         return Err("--limit can only be used with --list.".into());
     }
 
@@ -160,180 +325,10 @@ pub fn run() -> Result<()> {
             );
         }
     }
-
-    if matches.get_flag("import") {
-        if all_teams {
-            return Err("--all-teams cannot be used with --import.".into());
-        }
-        if local_only || shared_only {
-            return Err("--local-only and --shared-only cannot be used with --import.".into());
-        }
-        if matches.get_one::<String>("repo").is_some()
-            && matches.get_one::<String>("team").is_none()
-        {
-            return Err("--repo requires --team when using shared repository write mode.".into());
-        }
-        if matches.get_one::<String>("teams-dir").is_some()
-            && matches.get_one::<String>("team").is_none()
-        {
-            return Err(
-                "--teams-dir requires --team when using shared repository write mode.".into(),
-            );
-        }
-    }
-
-    let data_file = resolve_data_file_path(&matches, shared_context.as_ref())?;
-    let mut db = CurlDatabase::load_from_file(&data_file)?;
-
-    if let Some(curl_command) = matches.get_one::<String>("add") {
-        let description = matches
-            .get_one::<String>("description")
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty());
-        db.add_command(curl_command.clone(), description.clone());
-        db.save_to_file(&data_file)?;
-        match description {
-            Some(description) => {
-                println!("Added curl command: {} ({})", curl_command, description);
-            }
-            None => println!("Added curl command: {}", curl_command),
-        }
-    } else if matches.get_flag("import") {
-        match import_from_history() {
-            Ok(commands) => {
-                let added_count = db.add_commands(commands);
-                db.save_to_file(&data_file)?;
-                println!(
-                    "Imported {} new curl commands from shell history",
-                    added_count
-                );
-            }
-            Err(error) => {
-                eprintln!("Error importing from history: {}", error);
-            }
-        }
-    } else if matches.get_flag("list") {
-        let list_keywords: Option<Vec<String>> = matches
-            .get_many::<String>("keywords")
-            .map(|keywords| keywords.cloned().collect());
-        let limit = resolve_list_limit(&matches, &config);
-
-        if let Some(team) = matches.get_one::<String>("team") {
-            let mut sections = vec![OutputSection::shared_team(
-                team.clone(),
-                filter_commands(&db, list_keywords.as_deref()),
-            )];
-            let summary = OutputSummary {
-                hidden_due_to_limit: apply_list_limit(&mut sections, limit),
-                active_limit: limit,
-                ..OutputSummary::default()
-            };
-            print_sections(
-                &sections,
-                if list_keywords.is_some() {
-                    "No matching curl commands."
-                } else {
-                    "No curl commands stored."
-                },
-                &summary,
-            );
-            return Ok(());
-        }
-
-        if all_teams {
-            let mut sections = load_shared_sections_for_target(
-                shared_context
-                    .as_ref()
-                    .ok_or(shared_repository_required_message())?,
-                &SharedReadTarget::AllTeams,
-                list_keywords.as_deref(),
-            )?;
-            let summary = OutputSummary {
-                hidden_due_to_limit: apply_list_limit(&mut sections, limit),
-                active_limit: limit,
-                ..OutputSummary::default()
-            };
-            print_sections(
-                &sections,
-                if list_keywords.is_some() {
-                    "No matching curl commands."
-                } else {
-                    "No curl commands stored."
-                },
-                &summary,
-            );
-            return Ok(());
-        }
-
-        let plan = resolve_default_read_plan(&matches, &config, shared_context.as_ref())?;
-        let (mut sections, hidden_local_duplicates) = load_default_read_sections(
-            &db,
-            shared_context.as_ref(),
-            list_keywords.as_deref(),
-            &plan,
-        )?;
-        let mut summary = OutputSummary {
-            hidden_local_duplicates,
-            hidden_due_to_limit: 0,
-            active_limit: limit,
-        };
-        summary.hidden_due_to_limit = apply_list_limit(&mut sections, limit);
-        print_sections(
-            &sections,
-            if list_keywords.is_some() {
-                "No matching curl commands."
-            } else {
-                "No curl commands stored."
-            },
-            &summary,
-        );
-    } else if let Some(keywords) = matches.get_many::<String>("keywords") {
-        let keyword_vec: Vec<String> = keywords.cloned().collect();
-
-        if let Some(team) = matches.get_one::<String>("team") {
-            let sections = vec![OutputSection::shared_team(
-                team.clone(),
-                filter_commands(&db, Some(&keyword_vec)),
-            )];
-            print_sections(
-                &sections,
-                "No matching curl commands.",
-                &OutputSummary::default(),
-            );
-            return Ok(());
-        }
-
-        if all_teams {
-            let sections = load_shared_sections_for_target(
-                shared_context
-                    .as_ref()
-                    .ok_or(shared_repository_required_message())?,
-                &SharedReadTarget::AllTeams,
-                Some(&keyword_vec),
-            )?;
-            print_sections(
-                &sections,
-                "No matching curl commands.",
-                &OutputSummary::default(),
-            );
-            return Ok(());
-        }
-
-        let plan = resolve_default_read_plan(&matches, &config, shared_context.as_ref())?;
-        let (sections, hidden_local_duplicates) =
-            load_default_read_sections(&db, shared_context.as_ref(), Some(&keyword_vec), &plan)?;
-        let summary = OutputSummary {
-            hidden_local_duplicates,
-            hidden_due_to_limit: 0,
-            active_limit: None,
-        };
-        print_sections(&sections, "No matching curl commands.", &summary);
-    }
-
     Ok(())
 }
 
-fn filter_commands(database: &CurlDatabase, keywords: Option<&[String]>) -> Vec<OutputEntry> {
+fn filter_commands(database: &CommandDatabase, keywords: Option<&[String]>) -> Vec<OutputEntry> {
     match keywords {
         Some(keywords) => database
             .search(keywords)
@@ -350,7 +345,7 @@ fn filter_commands(database: &CurlDatabase, keywords: Option<&[String]>) -> Vec<
 
 fn resolve_default_read_plan(
     matches: &clap::ArgMatches,
-    config: &ReqbibConfig,
+    config: &CombibConfig,
     shared_context: Option<&SharedStorageContext>,
 ) -> Result<DefaultReadPlan> {
     if matches.get_flag("local-only") {
@@ -386,8 +381,9 @@ fn resolve_default_read_plan(
 }
 
 fn load_default_read_sections(
-    local_db: &CurlDatabase,
+    local_db: &CommandDatabase,
     shared_context: Option<&SharedStorageContext>,
+    biblioteca: &str,
     keywords: Option<&[String]>,
     plan: &DefaultReadPlan,
 ) -> Result<(Vec<OutputSection>, usize)> {
@@ -401,6 +397,7 @@ fn load_default_read_sections(
         Some(target) => load_shared_sections_for_target(
             shared_context.ok_or(shared_repository_required_message())?,
             target,
+            biblioteca,
             keywords,
         )?,
         None => Vec::new(),
@@ -411,7 +408,7 @@ fn load_default_read_sections(
 
     let mut sections = Vec::new();
     if !local_commands.is_empty() {
-        sections.push(OutputSection::local(local_commands));
+        sections.push(OutputSection::local(biblioteca.to_string(), local_commands));
     }
     sections.extend(shared_sections);
 
@@ -421,28 +418,31 @@ fn load_default_read_sections(
 fn load_shared_sections_for_target(
     shared_context: &SharedStorageContext,
     target: &SharedReadTarget,
+    biblioteca: &str,
     keywords: Option<&[String]>,
 ) -> Result<Vec<OutputSection>> {
     match target {
         SharedReadTarget::Team(team) => {
-            let commands = load_team_commands(shared_context, team, keywords)?;
+            let commands = load_team_commands(shared_context, team, biblioteca, keywords)?;
             Ok(vec![OutputSection::shared_team(
                 team.clone(),
+                biblioteca.to_string(),
                 commands
                     .into_iter()
                     .map(OutputEntry::from_owned_command)
                     .collect(),
             )])
         }
-        SharedReadTarget::AllTeams => load_shared_sections(shared_context, keywords),
+        SharedReadTarget::AllTeams => load_shared_sections(shared_context, biblioteca, keywords),
     }
 }
 
 fn load_shared_sections(
     shared_context: &SharedStorageContext,
+    biblioteca: &str,
     keywords: Option<&[String]>,
 ) -> Result<Vec<OutputSection>> {
-    let results = load_all_team_commands(shared_context, keywords)?;
+    let results = load_all_team_commands(shared_context, biblioteca, keywords)?;
     let mut sections = Vec::new();
     let mut current_team = None::<String>;
     let mut current_commands = Vec::new();
@@ -452,6 +452,7 @@ fn load_shared_sections(
             if let Some(team_name) = current_team.take() {
                 sections.push(OutputSection::shared_team(
                     team_name,
+                    biblioteca.to_string(),
                     std::mem::take(&mut current_commands),
                 ));
             }
@@ -461,7 +462,11 @@ fn load_shared_sections(
     }
 
     if let Some(team_name) = current_team {
-        sections.push(OutputSection::shared_team(team_name, current_commands));
+        sections.push(OutputSection::shared_team(
+            team_name,
+            biblioteca.to_string(),
+            current_commands,
+        ));
     }
 
     Ok(sections)
@@ -486,7 +491,7 @@ fn hide_local_duplicates(
     original_len.saturating_sub(local_commands.len())
 }
 
-fn resolve_list_limit(matches: &clap::ArgMatches, config: &ReqbibConfig) -> Option<usize> {
+fn resolve_list_limit(matches: &clap::ArgMatches, config: &CombibConfig) -> Option<usize> {
     if let Some(limit) = matches.get_one::<usize>("limit").copied() {
         return normalize_limit(limit);
     }
@@ -530,6 +535,14 @@ fn apply_list_limit(sections: &mut [OutputSection], limit: Option<usize>) -> usi
     hidden
 }
 
+fn empty_message(filtered: bool, biblioteca: &str) -> String {
+    if filtered {
+        format!("No matching commands in biblioteca '{biblioteca}'.")
+    } else {
+        format!("No commands stored in biblioteca '{biblioteca}'.")
+    }
+}
+
 fn print_sections(sections: &[OutputSection], empty_message: &str, summary: &OutputSummary) {
     let sections: Vec<&OutputSection> = sections
         .iter()
@@ -537,7 +550,7 @@ fn print_sections(sections: &[OutputSection], empty_message: &str, summary: &Out
         .collect();
 
     if sections.is_empty() {
-        println!("{}", empty_message);
+        println!("{empty_message}");
         return;
     }
 
@@ -571,11 +584,11 @@ fn print_sections(sections: &[OutputSection], empty_message: &str, summary: &Out
     }
 
     if let Some(message) = duplicate_message {
-        println!("{}", message);
+        println!("{message}");
     }
 
     if let Some(message) = limit_message {
-        println!("{}", message);
+        println!("{message}");
     }
 }
 
@@ -587,11 +600,10 @@ fn format_duplicate_hidden_message(hidden_local_duplicates: usize) -> Option<Str
     if hidden_local_duplicates == 0 {
         None
     } else if hidden_local_duplicates == 1 {
-        Some("1 local curl was hidden because it duplicates shared storage.".to_string())
+        Some("1 local command was hidden because it duplicates shared storage.".to_string())
     } else {
         Some(format!(
-            "{} local curls were hidden because they duplicate shared storage.",
-            hidden_local_duplicates
+            "{hidden_local_duplicates} local commands were hidden because they duplicate shared storage."
         ))
     }
 }
@@ -606,11 +618,11 @@ fn format_limit_hidden_message(
         None
     } else if hidden_due_to_limit == 1 {
         Some(format!(
-            "Showing first {limit} curl commands. 1 additional curl was hidden by the active list limit."
+            "Showing first {limit} commands. 1 additional command was hidden by the active list limit."
         ))
     } else {
         Some(format!(
-            "Showing first {limit} curl commands. {hidden_due_to_limit} additional curls were hidden by the active list limit."
+            "Showing first {limit} commands. {hidden_due_to_limit} additional commands were hidden by the active list limit."
         ))
     }
 }
@@ -624,14 +636,17 @@ mod tests {
 
     #[test]
     fn test_format_section_header_for_local() {
-        assert_eq!(format_section_header("Local"), "=== LOCAL ===");
+        assert_eq!(
+            format_section_header("Local / curl"),
+            "=== LOCAL / CURL ==="
+        );
     }
 
     #[test]
     fn test_format_section_header_for_shared_team() {
         assert_eq!(
-            format_section_header("Shared / platform"),
-            "=== SHARED / PLATFORM ==="
+            format_section_header("Shared / platform / curl"),
+            "=== SHARED / PLATFORM / CURL ==="
         );
     }
 
@@ -649,6 +664,7 @@ mod tests {
         ];
         let shared_sections = vec![OutputSection::shared_team(
             "platform",
+            "curl",
             vec![OutputEntry {
                 command: "curl https://shared.example.com/health".to_string(),
                 description: Some("Shared health".to_string()),
@@ -670,18 +686,22 @@ mod tests {
     #[test]
     fn test_apply_list_limit_across_sections() {
         let mut sections = vec![
-            OutputSection::local(vec![
-                OutputEntry {
-                    command: "curl https://local.example.com/one".to_string(),
-                    description: None,
-                },
-                OutputEntry {
-                    command: "curl https://local.example.com/two".to_string(),
-                    description: Some("Second".to_string()),
-                },
-            ]),
+            OutputSection::local(
+                "curl",
+                vec![
+                    OutputEntry {
+                        command: "curl https://local.example.com/one".to_string(),
+                        description: None,
+                    },
+                    OutputEntry {
+                        command: "curl https://local.example.com/two".to_string(),
+                        description: Some("Second".to_string()),
+                    },
+                ],
+            ),
             OutputSection::shared_team(
                 "platform",
+                "curl",
                 vec![OutputEntry {
                     command: "curl https://shared.example.com/one".to_string(),
                     description: None,
@@ -706,11 +726,11 @@ mod tests {
     fn test_duplicate_hidden_message_pluralization() {
         assert_eq!(
             format_duplicate_hidden_message(1),
-            Some("1 local curl was hidden because it duplicates shared storage.".to_string())
+            Some("1 local command was hidden because it duplicates shared storage.".to_string())
         );
         assert_eq!(
             format_duplicate_hidden_message(2),
-            Some("2 local curls were hidden because they duplicate shared storage.".to_string())
+            Some("2 local commands were hidden because they duplicate shared storage.".to_string())
         );
     }
 
@@ -719,14 +739,14 @@ mod tests {
         assert_eq!(
             format_limit_hidden_message(1, Some(20)),
             Some(
-                "Showing first 20 curl commands. 1 additional curl was hidden by the active list limit."
+                "Showing first 20 commands. 1 additional command was hidden by the active list limit."
                     .to_string()
             )
         );
         assert_eq!(
             format_limit_hidden_message(3, Some(10)),
             Some(
-                "Showing first 10 curl commands. 3 additional curls were hidden by the active list limit."
+                "Showing first 10 commands. 3 additional commands were hidden by the active list limit."
                     .to_string()
             )
         );

@@ -2,7 +2,7 @@ use regex::Regex;
 use std::collections::HashSet;
 use std::sync::OnceLock;
 
-const FILTERED_WORDS: &[&str] = &["curl", "http", "https", "www"];
+const FILTERED_WORDS: &[&str] = &["http", "https", "www"];
 
 fn url_regex() -> &'static Regex {
     static URL_REGEX: OnceLock<Regex> = OnceLock::new();
@@ -26,7 +26,8 @@ fn method_regex() -> &'static Regex {
 
 fn word_regex() -> &'static Regex {
     static WORD_REGEX: OnceLock<Regex> = OnceLock::new();
-    WORD_REGEX.get_or_init(|| Regex::new(r"\b[a-zA-Z]{3,}\b").expect("valid word regex"))
+    WORD_REGEX
+        .get_or_init(|| Regex::new(r"\b[a-zA-Z][a-zA-Z0-9_-]{2,}\b").expect("valid word regex"))
 }
 
 pub(crate) fn extract_keywords(command: &str) -> Vec<String> {
@@ -96,7 +97,7 @@ mod tests {
     use super::extract_keywords;
 
     #[test]
-    fn test_extract_keywords() {
+    fn test_extract_keywords_for_http_command() {
         let command = "curl -X POST https://api.github.com/user/repos -H 'Authorization: token xyz' -d '{\"name\":\"test\"}'";
         let keywords = extract_keywords(command);
 
@@ -138,15 +139,28 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_keywords_filters_common_words() {
+    fn test_extract_keywords_filters_common_protocol_words() {
         let command = "curl https://www.example.com/api";
         let keywords = extract_keywords(command);
 
+        assert!(keywords.contains(&"curl".to_string()));
         assert!(keywords.contains(&"example".to_string()));
         assert!(keywords.contains(&"api".to_string()));
-        assert!(!keywords.contains(&"curl".to_string()));
         assert!(!keywords.contains(&"http".to_string()));
         assert!(!keywords.contains(&"https".to_string()));
         assert!(!keywords.contains(&"www".to_string()));
+    }
+
+    #[test]
+    fn test_extract_keywords_for_non_http_command() {
+        let command = "kubectl rollout restart deployment api-server --namespace platform";
+        let keywords = extract_keywords(command);
+
+        assert!(keywords.contains(&"kubectl".to_string()));
+        assert!(keywords.contains(&"rollout".to_string()));
+        assert!(keywords.contains(&"restart".to_string()));
+        assert!(keywords.contains(&"deployment".to_string()));
+        assert!(keywords.contains(&"api-server".to_string()));
+        assert!(keywords.contains(&"platform".to_string()));
     }
 }

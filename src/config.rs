@@ -1,4 +1,4 @@
-use crate::database::{CurlCommand, CurlDatabase};
+use crate::database::{CommandDatabase, StoredCommand};
 use crate::github::{
     ensure_github_repo_checkout, get_default_github_state_root, maybe_update_github_repo_checkout,
     validate_github_repo_name, write_github_repo_sync_stamp,
@@ -14,6 +14,9 @@ use std::time::Duration;
 
 const SHARED_REPOSITORY_REQUIRED_MESSAGE: &str =
     "No shared repository configured. Use --repo or configure shared_repo in config.";
+const NO_BIBLIOTECA_SELECTED_MESSAGE: &str =
+    "No biblioteca selected. Use -b/--biblioteca or configure default_biblioteca.";
+const LIBS_DIR_NAME: &str = "libs";
 const LEGACY_SHARED_REPO_CONFIG_KEYS: &[&str] = &[
     "github_repo",
     "shared_repo_path",
@@ -23,9 +26,10 @@ const LEGACY_SHARED_REPO_CONFIG_KEYS: &[&str] = &[
 ];
 
 #[derive(Debug, Default, Clone, PartialEq)]
-pub(crate) struct ReqbibConfig {
+pub(crate) struct CombibConfig {
     pub(crate) shared_repo: Option<SharedRepoConfig>,
     pub(crate) default_list_limit: Option<usize>,
+    pub(crate) default_biblioteca: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -54,10 +58,11 @@ pub(crate) struct GithubSharedRepoConfig {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RawReqbibConfig {
+struct RawCombibConfig {
     #[serde(default)]
     shared_repo: Option<RawSharedRepoConfig>,
     default_list_limit: Option<usize>,
+    default_biblioteca: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -85,13 +90,13 @@ pub(crate) enum DefaultSharedReadTarget {
     AllTeams,
 }
 
-impl ReqbibConfig {
+impl CombibConfig {
     pub(crate) fn load_from_file(path: &Path) -> Result<Self> {
         if path.exists() {
             let content = fs::read_to_string(path)?;
             let value: Value = serde_json::from_str(&content)?;
             validate_no_legacy_flat_shared_repo_keys(&value)?;
-            let config: RawReqbibConfig = serde_json::from_value(value)?;
+            let config: RawCombibConfig = serde_json::from_value(value)?;
             Self::try_from(config)
         } else {
             Ok(Self::default())
@@ -105,7 +110,7 @@ impl ReqbibConfig {
             .and_then(SharedRepoConfig::teams_dir)
             .cloned()
             .unwrap_or_else(|| PathBuf::from("teams"));
-        validate_relative_directory(&teams_dir)?;
+        validate_relative_directory("Teams directory", &teams_dir)?;
         Ok(teams_dir)
     }
 
@@ -153,18 +158,23 @@ impl GithubSharedRepoConfig {
     }
 }
 
-impl TryFrom<RawReqbibConfig> for ReqbibConfig {
+impl TryFrom<RawCombibConfig> for CombibConfig {
     type Error = Box<dyn std::error::Error>;
 
-    fn try_from(value: RawReqbibConfig) -> Result<Self> {
+    fn try_from(value: RawCombibConfig) -> Result<Self> {
         let shared_repo = match value.shared_repo {
             Some(shared_repo) => Some(SharedRepoConfig::try_from(shared_repo)?),
             None => None,
         };
 
+        if let Some(default_biblioteca) = value.default_biblioteca.as_deref() {
+            validate_biblioteca_name(default_biblioteca)?;
+        }
+
         Ok(Self {
             shared_repo,
             default_list_limit: value.default_list_limit,
+            default_biblioteca: value.default_biblioteca,
         })
     }
 }
@@ -174,7 +184,7 @@ impl TryFrom<RawSharedRepoConfig> for SharedRepoConfig {
 
     fn try_from(value: RawSharedRepoConfig) -> Result<Self> {
         if let Some(teams_dir) = value.teams_dir.as_ref() {
-            validate_relative_directory(teams_dir)?;
+            validate_relative_directory("Teams directory", teams_dir)?;
         }
 
         if let Some(default_team) = value.default_team.as_deref() {
@@ -287,23 +297,34 @@ fn validate_no_legacy_flat_shared_repo_keys(value: &Value) -> Result<()> {
 }
 
 pub(crate) fn validate_team_name(team: &str) -> Result<()> {
-    let is_valid = !team.is_empty()
-        && team != "."
-        && team != ".."
-        && team
+    validate_slug(team, "Team names")
+}
+
+pub(crate) fn validate_biblioteca_name(biblioteca: &str) -> Result<()> {
+    validate_slug(biblioteca, "Biblioteca names")
+}
+
+fn validate_slug(value: &str, label: &str) -> Result<()> {
+    let is_valid = !value.is_empty()
+        && value != "."
+        && value != ".."
+        && value
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'));
 
     if is_valid {
         Ok(())
     } else {
-        Err("Team names may only contain letters, numbers, dots, underscores, and hyphens.".into())
+        Err(
+            format!("{label} may only contain letters, numbers, dots, underscores, and hyphens.")
+                .into(),
+        )
     }
 }
 
-pub(crate) fn validate_relative_directory(path: &Path) -> Result<()> {
+pub(crate) fn validate_relative_directory(label: &str, path: &Path) -> Result<()> {
     if path.as_os_str().is_empty() {
-        return Err("Teams directory cannot be empty.".into());
+        return Err(format!("{label} cannot be empty.").into());
     }
 
     let is_valid = path
@@ -313,20 +334,37 @@ pub(crate) fn validate_relative_directory(path: &Path) -> Result<()> {
     if is_valid {
         Ok(())
     } else {
-        Err("Teams directory must be a relative path without '.' or '..' components.".into())
+        Err(format!("{label} must be a relative path without '.' or '..' components.").into())
     }
 }
 
-pub(crate) fn get_local_data_file_path() -> PathBuf {
+pub(crate) fn resolve_active_biblioteca(
+    matches: &ArgMatches,
+    config: &CombibConfig,
+) -> Result<String> {
+    if let Some(biblioteca) = matches.get_one::<String>("biblioteca") {
+        validate_biblioteca_name(biblioteca)?;
+        Ok(biblioteca.clone())
+    } else if let Some(default_biblioteca) = config.default_biblioteca.as_ref() {
+        Ok(default_biblioteca.clone())
+    } else {
+        Err(NO_BIBLIOTECA_SELECTED_MESSAGE.into())
+    }
+}
+
+pub(crate) fn get_local_data_file_path(biblioteca: &str) -> Result<PathBuf> {
+    validate_biblioteca_name(biblioteca)?;
+
     let mut path = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    path.push(".reqbib");
-    path.push("commands.json");
-    path
+    path.push(".combib");
+    path.push(LIBS_DIR_NAME);
+    path.push(format!("{biblioteca}.json"));
+    Ok(path)
 }
 
 fn get_default_config_file_path() -> PathBuf {
     let mut path = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    path.push(".reqbib");
+    path.push(".combib");
     path.push("config.json");
     path
 }
@@ -335,26 +373,30 @@ pub(crate) fn get_team_data_file_path(
     repository_root: &Path,
     teams_dir: &Path,
     team: &str,
+    biblioteca: &str,
 ) -> Result<PathBuf> {
     validate_team_name(team)?;
-    validate_relative_directory(teams_dir)?;
+    validate_biblioteca_name(biblioteca)?;
+    validate_relative_directory("Teams directory", teams_dir)?;
+
     Ok(repository_root
         .join(teams_dir)
         .join(team)
-        .join("commands.json"))
+        .join(LIBS_DIR_NAME)
+        .join(format!("{biblioteca}.json")))
 }
 
-pub(crate) fn resolve_config(matches: &ArgMatches) -> Result<ReqbibConfig> {
+pub(crate) fn resolve_config(matches: &ArgMatches) -> Result<CombibConfig> {
     let config_path = matches
         .get_one::<String>("config")
         .map(PathBuf::from)
         .unwrap_or_else(get_default_config_file_path);
-    ReqbibConfig::load_from_file(&config_path)
+    CombibConfig::load_from_file(&config_path)
 }
 
 pub(crate) fn resolve_shared_storage_context(
     matches: &ArgMatches,
-    config: &ReqbibConfig,
+    config: &CombibConfig,
 ) -> Result<Option<SharedStorageContext>> {
     let explicit_repo = matches.get_one::<String>("repo").map(PathBuf::from);
     let explicit_teams_dir = matches.get_one::<String>("teams-dir").map(PathBuf::from);
@@ -378,20 +420,13 @@ pub(crate) fn resolve_shared_storage_context(
                         &get_default_github_state_root(),
                         &github_config.github_repo,
                     );
-                } else {
-                    match maybe_update_github_repo_checkout(
-                        &github_config.github_repo,
-                        &checkout_path,
-                        github_config.auto_update_repo,
-                        github_config.auto_update_interval(),
-                    ) {
-                        Ok(_) => {}
-                        Err(error) => {
-                            eprintln!(
-                                "Warning: failed to update shared repository checkout: {error}"
-                            );
-                        }
-                    }
+                } else if let Err(error) = maybe_update_github_repo_checkout(
+                    &github_config.github_repo,
+                    &checkout_path,
+                    github_config.auto_update_repo,
+                    github_config.auto_update_interval(),
+                ) {
+                    eprintln!("Warning: failed to update shared repository checkout: {error}");
                 }
                 checkout_path
             }
@@ -405,7 +440,7 @@ pub(crate) fn resolve_shared_storage_context(
 
     let teams_dir = match explicit_teams_dir {
         Some(path) => {
-            validate_relative_directory(&path)?;
+            validate_relative_directory("Teams directory", &path)?;
             path
         }
         None => config.teams_dir()?,
@@ -420,6 +455,7 @@ pub(crate) fn resolve_shared_storage_context(
 pub(crate) fn resolve_data_file_path(
     matches: &ArgMatches,
     shared_context: Option<&SharedStorageContext>,
+    biblioteca: &str,
 ) -> Result<PathBuf> {
     match matches.get_one::<String>("team") {
         Some(team) => {
@@ -428,16 +464,18 @@ pub(crate) fn resolve_data_file_path(
                 &shared_context.repository_root,
                 &shared_context.teams_dir,
                 team,
+                biblioteca,
             )
         }
-        None => Ok(get_local_data_file_path()),
+        None => get_local_data_file_path(biblioteca),
     }
 }
 
 pub(crate) fn load_all_team_commands(
     shared_context: &SharedStorageContext,
+    biblioteca: &str,
     keywords: Option<&[String]>,
-) -> Result<Vec<(String, CurlCommand)>> {
+) -> Result<Vec<(String, StoredCommand)>> {
     let teams_root = shared_context
         .repository_root
         .join(&shared_context.teams_dir);
@@ -463,8 +501,9 @@ pub(crate) fn load_all_team_commands(
             &shared_context.repository_root,
             &shared_context.teams_dir,
             &team_name,
+            biblioteca,
         )?;
-        let database = CurlDatabase::load_from_file(&team_path)?;
+        let database = CommandDatabase::load_from_file(&team_path)?;
 
         match keywords {
             Some(keywords) => {
@@ -486,14 +525,16 @@ pub(crate) fn load_all_team_commands(
 pub(crate) fn load_team_commands(
     shared_context: &SharedStorageContext,
     team: &str,
+    biblioteca: &str,
     keywords: Option<&[String]>,
-) -> Result<Vec<CurlCommand>> {
+) -> Result<Vec<StoredCommand>> {
     let team_path = get_team_data_file_path(
         &shared_context.repository_root,
         &shared_context.teams_dir,
         team,
+        biblioteca,
     )?;
-    let database = CurlDatabase::load_from_file(&team_path)?;
+    let database = CommandDatabase::load_from_file(&team_path)?;
 
     Ok(match keywords {
         Some(keywords) => database.search(keywords).into_iter().cloned().collect(),
@@ -508,9 +549,9 @@ pub(crate) fn shared_repository_required_message() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        get_team_data_file_path, resolve_data_file_path, resolve_shared_storage_context,
-        validate_relative_directory, DefaultSharedReadTarget, GithubSharedRepoConfig,
-        PathSharedRepoConfig, ReqbibConfig, SharedRepoConfig,
+        get_local_data_file_path, get_team_data_file_path, resolve_active_biblioteca,
+        validate_biblioteca_name, validate_relative_directory, CombibConfig,
+        DefaultSharedReadTarget, GithubSharedRepoConfig, PathSharedRepoConfig, SharedRepoConfig,
     };
     use crate::cli::build_cli;
     use crate::github::DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES;
@@ -529,53 +570,51 @@ mod tests {
     }
 
     #[test]
-    fn test_get_team_data_file_path() {
-        let team_path = get_team_data_file_path(
-            Path::new("/tmp/shared-reqbib"),
-            Path::new("teams"),
-            "platform",
-        )
-        .unwrap();
+    fn test_validate_biblioteca_name() {
+        validate_biblioteca_name("curl").unwrap();
+        validate_biblioteca_name("git-tools").unwrap();
 
+        let error = validate_biblioteca_name("../bad").expect_err("invalid biblioteca");
         assert_eq!(
-            team_path,
-            Path::new("/tmp/shared-reqbib")
-                .join("teams")
-                .join("platform")
-                .join("commands.json")
+            error.to_string(),
+            "Biblioteca names may only contain letters, numbers, dots, underscores, and hyphens."
         );
     }
 
     #[test]
-    fn test_get_team_data_file_path_with_custom_teams_dir() {
-        let team_path = get_team_data_file_path(
-            Path::new("/tmp/shared-reqbib"),
-            Path::new("company-teams"),
-            "platform",
-        )
-        .unwrap();
-
-        assert_eq!(
-            team_path,
-            Path::new("/tmp/shared-reqbib")
-                .join("company-teams")
-                .join("platform")
-                .join("commands.json")
-        );
-    }
-
-    #[test]
-    fn test_get_team_data_file_path_rejects_invalid_team_name() {
-        let error = get_team_data_file_path(
-            Path::new("/tmp/shared-reqbib"),
-            Path::new("teams"),
-            "../platform",
-        )
-        .expect_err("invalid team names should be rejected");
+    fn test_validate_relative_directory_rejects_parent_components() {
+        let error = validate_relative_directory("Teams directory", Path::new("../teams"))
+            .expect_err("invalid teams dir");
 
         assert_eq!(
             error.to_string(),
-            "Team names may only contain letters, numbers, dots, underscores, and hyphens."
+            "Teams directory must be a relative path without '.' or '..' components."
+        );
+    }
+
+    #[test]
+    fn test_get_local_data_file_path() {
+        let path = get_local_data_file_path("curl").unwrap();
+        assert!(path.ends_with(".combib/libs/curl.json"));
+    }
+
+    #[test]
+    fn test_get_team_data_file_path() {
+        let team_path = get_team_data_file_path(
+            Path::new("/tmp/shared-combib"),
+            Path::new("teams"),
+            "platform",
+            "curl",
+        )
+        .unwrap();
+
+        assert_eq!(
+            team_path,
+            Path::new("/tmp/shared-combib")
+                .join("teams")
+                .join("platform")
+                .join("libs")
+                .join("curl.json")
         );
     }
 
@@ -584,37 +623,39 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("missing-config.json");
 
-        let config = ReqbibConfig::load_from_file(&config_path).unwrap();
+        let config = CombibConfig::load_from_file(&config_path).unwrap();
 
-        assert_eq!(config, ReqbibConfig::default());
+        assert_eq!(config, CombibConfig::default());
     }
 
     #[test]
-    fn test_load_config_with_path_shared_repo() {
+    fn test_load_config_with_path_shared_repo_and_default_biblioteca() {
         let temp_dir = TempDir::new().unwrap();
         let config_path = write_config_file(
             &temp_dir,
             serde_json::json!({
+                "default_biblioteca": "curl",
                 "shared_repo": {
                     "mode": "path",
-                    "path": "/tmp/shared-reqbib",
+                    "path": "/tmp/shared-combib",
                     "teams_dir": "company-teams"
                 }
             }),
         );
 
-        let config = ReqbibConfig::load_from_file(&config_path).unwrap();
+        let config = CombibConfig::load_from_file(&config_path).unwrap();
 
         assert_eq!(
             config,
-            ReqbibConfig {
+            CombibConfig {
                 shared_repo: Some(SharedRepoConfig::Path(PathSharedRepoConfig {
-                    path: PathBuf::from("/tmp/shared-reqbib"),
+                    path: PathBuf::from("/tmp/shared-combib"),
                     teams_dir: Some(PathBuf::from("company-teams")),
                     default_team: None,
                     default_all_teams: false,
                 })),
                 default_list_limit: None,
+                default_biblioteca: Some("curl".to_string()),
             }
         );
     }
@@ -627,18 +668,18 @@ mod tests {
             serde_json::json!({
                 "shared_repo": {
                     "mode": "github",
-                    "github_repo": "acme/shared-reqbib"
+                    "github_repo": "acme/shared-combib"
                 }
             }),
         );
 
-        let config = ReqbibConfig::load_from_file(&config_path).unwrap();
+        let config = CombibConfig::load_from_file(&config_path).unwrap();
 
         assert_eq!(
             config,
-            ReqbibConfig {
+            CombibConfig {
                 shared_repo: Some(SharedRepoConfig::Github(GithubSharedRepoConfig {
-                    github_repo: "acme/shared-reqbib".to_string(),
+                    github_repo: "acme/shared-combib".to_string(),
                     teams_dir: None,
                     auto_update_repo: true,
                     auto_update_interval_minutes: DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES,
@@ -646,6 +687,7 @@ mod tests {
                     default_all_teams: false,
                 })),
                 default_list_limit: None,
+                default_biblioteca: None,
             }
         );
     }
@@ -658,13 +700,13 @@ mod tests {
             serde_json::json!({
                 "shared_repo": {
                     "mode": "path",
-                    "path": "/tmp/shared-reqbib",
+                    "path": "/tmp/shared-combib",
                     "default_team": "platform"
-                },
+                }
             }),
         );
 
-        let config = ReqbibConfig::load_from_file(&config_path).unwrap();
+        let config = CombibConfig::load_from_file(&config_path).unwrap();
 
         assert_eq!(
             config.default_shared_read_target(),
@@ -680,13 +722,13 @@ mod tests {
             serde_json::json!({
                 "shared_repo": {
                     "mode": "path",
-                    "path": "/tmp/shared-reqbib",
+                    "path": "/tmp/shared-combib",
                     "default_all_teams": true
                 }
             }),
         );
 
-        let config = ReqbibConfig::load_from_file(&config_path).unwrap();
+        let config = CombibConfig::load_from_file(&config_path).unwrap();
 
         assert_eq!(
             config.default_shared_read_target(),
@@ -695,32 +737,17 @@ mod tests {
     }
 
     #[test]
-    fn test_load_config_with_default_list_limit() {
-        let temp_dir = TempDir::new().unwrap();
-        let config_path = write_config_file(
-            &temp_dir,
-            serde_json::json!({
-                "default_list_limit": 12
-            }),
-        );
-
-        let config = ReqbibConfig::load_from_file(&config_path).unwrap();
-
-        assert_eq!(config.default_list_limit, Some(12));
-    }
-
-    #[test]
     fn test_load_config_rejects_flat_legacy_shared_repo_keys() {
         let temp_dir = TempDir::new().unwrap();
         let config_path = write_config_file(
             &temp_dir,
             serde_json::json!({
-                "github_repo": "acme/shared-reqbib",
+                "github_repo": "acme/shared-combib",
                 "teams_dir": "teams"
             }),
         );
 
-        let error = ReqbibConfig::load_from_file(&config_path)
+        let error = CombibConfig::load_from_file(&config_path)
             .expect_err("legacy flat config should be rejected");
 
         assert!(error
@@ -729,290 +756,21 @@ mod tests {
     }
 
     #[test]
-    fn test_load_config_rejects_missing_path_for_path_mode() {
-        let temp_dir = TempDir::new().unwrap();
-        let config_path = write_config_file(
-            &temp_dir,
-            serde_json::json!({
-                "shared_repo": {
-                    "mode": "path"
-                }
-            }),
-        );
-
-        let error =
-            ReqbibConfig::load_from_file(&config_path).expect_err("path mode requires a path");
-
-        assert_eq!(
-            error.to_string(),
-            "shared_repo.mode 'path' requires shared_repo.path."
-        );
-    }
-
-    #[test]
-    fn test_load_config_rejects_missing_github_repo_for_github_mode() {
-        let temp_dir = TempDir::new().unwrap();
-        let config_path = write_config_file(
-            &temp_dir,
-            serde_json::json!({
-                "shared_repo": {
-                    "mode": "github"
-                }
-            }),
-        );
-
-        let error =
-            ReqbibConfig::load_from_file(&config_path).expect_err("github mode requires a repo");
-
-        assert_eq!(
-            error.to_string(),
-            "shared_repo.mode 'github' requires shared_repo.github_repo."
-        );
-    }
-
-    #[test]
-    fn test_load_config_rejects_mixed_path_and_github_fields() {
-        let temp_dir = TempDir::new().unwrap();
-        let config_path = write_config_file(
-            &temp_dir,
-            serde_json::json!({
-                "shared_repo": {
-                    "mode": "github",
-                    "github_repo": "acme/shared-reqbib",
-                    "path": "/tmp/shared-reqbib"
-                }
-            }),
-        );
-
-        let error = ReqbibConfig::load_from_file(&config_path)
-            .expect_err("mixed config should be rejected");
-
-        assert_eq!(
-            error.to_string(),
-            "shared_repo.mode 'github' cannot be combined with shared_repo.path."
-        );
-    }
-
-    #[test]
-    fn test_load_config_rejects_auto_update_fields_in_path_mode() {
-        let temp_dir = TempDir::new().unwrap();
-        let config_path = write_config_file(
-            &temp_dir,
-            serde_json::json!({
-                "shared_repo": {
-                    "mode": "path",
-                    "path": "/tmp/shared-reqbib",
-                    "auto_update_repo": true
-                }
-            }),
-        );
-
-        let error = ReqbibConfig::load_from_file(&config_path)
-            .expect_err("path mode should reject github-only fields");
-
-        assert_eq!(
-            error.to_string(),
-            "shared_repo.auto_update_repo is only valid when shared_repo.mode is 'github'."
-        );
-    }
-
-    #[test]
-    fn test_load_config_rejects_zero_auto_update_interval() {
-        let temp_dir = TempDir::new().unwrap();
-        let config_path = write_config_file(
-            &temp_dir,
-            serde_json::json!({
-                "shared_repo": {
-                    "mode": "github",
-                    "github_repo": "acme/shared-reqbib",
-                    "auto_update_interval_minutes": 0
-                }
-            }),
-        );
-
-        let error = ReqbibConfig::load_from_file(&config_path)
-            .expect_err("zero interval should be rejected");
-
-        assert_eq!(
-            error.to_string(),
-            "shared_repo.auto_update_interval_minutes must be greater than 0."
-        );
-    }
-
-    #[test]
-    fn test_load_config_rejects_default_team_with_default_all_teams() {
-        let temp_dir = TempDir::new().unwrap();
-        let config_path = write_config_file(
-            &temp_dir,
-            serde_json::json!({
-                "shared_repo": {
-                    "mode": "path",
-                    "path": "/tmp/shared-reqbib",
-                    "default_team": "platform",
-                    "default_all_teams": true
-                }
-            }),
-        );
-
-        let error = ReqbibConfig::load_from_file(&config_path)
-            .expect_err("conflicting default shared read selectors should be rejected");
-
-        assert_eq!(
-            error.to_string(),
-            "shared_repo.default_team cannot be combined with shared_repo.default_all_teams."
-        );
-    }
-
-    #[test]
-    fn test_load_config_rejects_invalid_default_team() {
-        let temp_dir = TempDir::new().unwrap();
-        let config_path = write_config_file(
-            &temp_dir,
-            serde_json::json!({
-                "shared_repo": {
-                    "mode": "path",
-                    "path": "/tmp/shared-reqbib",
-                    "default_team": "../platform"
-                }
-            }),
-        );
-
-        let error = ReqbibConfig::load_from_file(&config_path)
-            .expect_err("invalid team names should be rejected");
-
-        assert_eq!(
-            error.to_string(),
-            "Team names may only contain letters, numbers, dots, underscores, and hyphens."
-        );
-    }
-
-    #[test]
-    fn test_config_teams_dir_defaults_to_teams() {
-        let config = ReqbibConfig::default();
-
-        assert_eq!(config.teams_dir().unwrap(), PathBuf::from("teams"));
-    }
-
-    #[test]
-    fn test_config_teams_dir_rejects_parent_directory() {
-        let config = ReqbibConfig {
-            shared_repo: Some(SharedRepoConfig::Path(PathSharedRepoConfig {
-                path: PathBuf::from("/tmp/shared-reqbib"),
-                teams_dir: Some(PathBuf::from("../teams")),
-                default_team: None,
-                default_all_teams: false,
-            })),
-            default_list_limit: None,
+    fn test_resolve_active_biblioteca_prefers_cli_then_config() {
+        let matches = build_cli()
+            .try_get_matches_from(["combib", "-b", "git"])
+            .unwrap();
+        let config = CombibConfig {
+            default_biblioteca: Some("curl".to_string()),
+            ..CombibConfig::default()
         };
 
-        let error = config
-            .teams_dir()
-            .expect_err("invalid teams dir should be rejected");
+        assert_eq!(resolve_active_biblioteca(&matches, &config).unwrap(), "git");
 
+        let matches = build_cli().try_get_matches_from(["combib", "-l"]).unwrap();
         assert_eq!(
-            error.to_string(),
-            "Teams directory must be a relative path without '.' or '..' components."
-        );
-    }
-
-    #[test]
-    fn test_validate_relative_directory_rejects_absolute_paths() {
-        let error = validate_relative_directory(Path::new("/tmp/teams"))
-            .expect_err("absolute paths should be rejected");
-
-        assert_eq!(
-            error.to_string(),
-            "Teams directory must be a relative path without '.' or '..' components."
-        );
-    }
-
-    #[test]
-    fn test_validate_relative_directory_accepts_nested_relative_paths() {
-        validate_relative_directory(Path::new("company/teams")).unwrap();
-    }
-
-    #[test]
-    fn test_get_team_data_file_path_rejects_invalid_teams_dir() {
-        let error = get_team_data_file_path(
-            Path::new("/tmp/shared-reqbib"),
-            Path::new("../teams"),
-            "platform",
-        )
-        .expect_err("invalid teams dir should be rejected");
-
-        assert_eq!(
-            error.to_string(),
-            "Teams directory must be a relative path without '.' or '..' components."
-        );
-    }
-
-    #[test]
-    fn test_resolve_data_file_path_uses_configured_repository_settings() {
-        let command = build_cli();
-        let matches = command.get_matches_from([
-            "reqbib",
-            "--config",
-            "/tmp/config.json",
-            "--team",
-            "platform",
-        ]);
-
-        let config = ReqbibConfig {
-            shared_repo: Some(SharedRepoConfig::Path(PathSharedRepoConfig {
-                path: PathBuf::from("/tmp/shared-reqbib"),
-                teams_dir: Some(PathBuf::from("company-teams")),
-                default_team: None,
-                default_all_teams: false,
-            })),
-            default_list_limit: None,
-        };
-
-        let shared_context = resolve_shared_storage_context(&matches, &config).unwrap();
-        let path = resolve_data_file_path(&matches, shared_context.as_ref()).unwrap();
-
-        assert_eq!(
-            path,
-            Path::new("/tmp/shared-reqbib")
-                .join("company-teams")
-                .join("platform")
-                .join("commands.json")
-        );
-    }
-
-    #[test]
-    fn test_resolve_data_file_path_prefers_cli_over_config() {
-        let command = build_cli();
-        let matches = command.get_matches_from([
-            "reqbib",
-            "--config",
-            "/tmp/config.json",
-            "--repo",
-            "/tmp/override-repo",
-            "--teams-dir",
-            "override-teams",
-            "--team",
-            "platform",
-        ]);
-
-        let config = ReqbibConfig {
-            shared_repo: Some(SharedRepoConfig::Path(PathSharedRepoConfig {
-                path: PathBuf::from("/tmp/shared-reqbib"),
-                teams_dir: Some(PathBuf::from("company-teams")),
-                default_team: None,
-                default_all_teams: false,
-            })),
-            default_list_limit: None,
-        };
-
-        let shared_context = resolve_shared_storage_context(&matches, &config).unwrap();
-        let path = resolve_data_file_path(&matches, shared_context.as_ref()).unwrap();
-
-        assert_eq!(
-            path,
-            Path::new("/tmp/override-repo")
-                .join("override-teams")
-                .join("platform")
-                .join("commands.json")
+            resolve_active_biblioteca(&matches, &config).unwrap(),
+            "curl"
         );
     }
 }

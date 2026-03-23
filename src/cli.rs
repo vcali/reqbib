@@ -1,15 +1,15 @@
 use clap::{Arg, Command};
 
 pub(crate) fn build_cli() -> Command {
-    Command::new("reqbib")
-        .about("A CLI tool for managing curl commands")
+    Command::new("combib")
+        .about("A CLI tool for storing and sharing command bibliotecas")
         .version("0.1.0")
         .arg(
             Arg::new("add")
                 .short('a')
                 .long("add")
-                .value_name("CURL_COMMAND")
-                .help("Add a new curl command"),
+                .value_name("COMMAND")
+                .help("Add a new command"),
         )
         .arg(
             Arg::new("description")
@@ -18,17 +18,17 @@ pub(crate) fn build_cli() -> Command {
                 .help("Optional brief description for --add"),
         )
         .arg(
-            Arg::new("import")
-                .short('i')
-                .long("import")
-                .help("Import curl commands from shell history")
-                .action(clap::ArgAction::SetTrue),
+            Arg::new("biblioteca")
+                .short('b')
+                .long("biblioteca")
+                .value_name("NAME")
+                .help("Active biblioteca name"),
         )
         .arg(
             Arg::new("list")
                 .short('l')
                 .long("list")
-                .help("List all stored curl commands")
+                .help("List all stored commands in the active biblioteca")
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(
@@ -42,7 +42,7 @@ pub(crate) fn build_cli() -> Command {
             Arg::new("config")
                 .long("config")
                 .value_name("PATH")
-                .help("Path to a reqbib config file"),
+                .help("Path to a combib config file"),
         )
         .arg(
             Arg::new("repo")
@@ -82,7 +82,7 @@ pub(crate) fn build_cli() -> Command {
         )
         .arg(
             Arg::new("keywords")
-                .help("Keywords to search for")
+                .help("Keywords to search for in the active biblioteca")
                 .num_args(0..),
         )
 }

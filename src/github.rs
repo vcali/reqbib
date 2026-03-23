@@ -28,14 +28,14 @@ pub(crate) fn validate_github_repo_name(repo: &str) -> Result<()> {
 
 pub(crate) fn get_default_github_checkout_root() -> PathBuf {
     let mut path = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    path.push(".reqbib");
+    path.push(".combib");
     path.push("repos");
     path
 }
 
 pub(crate) fn get_default_github_state_root() -> PathBuf {
     let mut path = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    path.push(".reqbib");
+    path.push(".combib");
     path.push("state");
     path
 }
@@ -63,7 +63,7 @@ pub(crate) fn get_github_repo_sync_stamp_path(
 }
 
 fn clone_github_repo(github_repo: &str, checkout_path: &Path) -> Result<()> {
-    let gh_binary = env::var("REQBIB_GH_BIN").unwrap_or_else(|_| "gh".to_string());
+    let gh_binary = env::var("COMBIB_GH_BIN").unwrap_or_else(|_| "gh".to_string());
     let output = ProcessCommand::new(&gh_binary)
         .arg("repo")
         .arg("clone")
@@ -85,7 +85,7 @@ fn clone_github_repo(github_repo: &str, checkout_path: &Path) -> Result<()> {
 }
 
 fn pull_github_repo(checkout_path: &Path) -> Result<()> {
-    let git_binary = env::var("REQBIB_GIT_BIN").unwrap_or_else(|_| "git".to_string());
+    let git_binary = env::var("COMBIB_GIT_BIN").unwrap_or_else(|_| "git".to_string());
     let output = ProcessCommand::new(&git_binary)
         .arg("-C")
         .arg(checkout_path)
@@ -207,7 +207,7 @@ mod tests {
 
     #[test]
     fn test_validate_github_repo_name_accepts_owner_repo() {
-        validate_github_repo_name("acme/shared-reqbib").unwrap();
+        validate_github_repo_name("acme/shared-combib").unwrap();
     }
 
     #[test]
@@ -224,12 +224,12 @@ mod tests {
     #[test]
     fn test_get_github_repo_checkout_path() {
         let checkout_path =
-            get_github_repo_checkout_path(Path::new("/tmp/reqbib-repos"), "acme/shared-reqbib")
+            get_github_repo_checkout_path(Path::new("/tmp/combib-repos"), "acme/shared-combib")
                 .unwrap();
 
         assert_eq!(
             checkout_path,
-            Path::new("/tmp/reqbib-repos").join("acme__shared-reqbib")
+            Path::new("/tmp/combib-repos").join("acme__shared-combib")
         );
     }
 
@@ -239,17 +239,17 @@ mod tests {
         let checkout_root = temp_dir.path().join("repos");
 
         let (checkout_path, was_cloned) = ensure_github_repo_checkout_with_runner(
-            "acme/shared-reqbib",
+            "acme/shared-combib",
             &checkout_root,
             |repo, destination| {
-                assert_eq!(repo, "acme/shared-reqbib");
+                assert_eq!(repo, "acme/shared-combib");
                 fs::create_dir_all(destination)?;
                 Ok(())
             },
         )
         .unwrap();
 
-        assert_eq!(checkout_path, checkout_root.join("acme__shared-reqbib"));
+        assert_eq!(checkout_path, checkout_root.join("acme__shared-combib"));
         assert!(checkout_path.exists());
         assert!(was_cloned);
     }
@@ -258,11 +258,11 @@ mod tests {
     fn test_ensure_github_repo_checkout_with_runner_uses_existing_checkout() {
         let temp_dir = TempDir::new().unwrap();
         let checkout_root = temp_dir.path().join("repos");
-        let existing_checkout = checkout_root.join("acme__shared-reqbib");
+        let existing_checkout = checkout_root.join("acme__shared-combib");
         fs::create_dir_all(&existing_checkout).unwrap();
 
         let (checkout_path, was_cloned) = ensure_github_repo_checkout_with_runner(
-            "acme/shared-reqbib",
+            "acme/shared-combib",
             &checkout_root,
             |_repo, _destination| Err("clone should not be called".into()),
         )
@@ -275,24 +275,24 @@ mod tests {
     #[test]
     fn test_get_github_repo_sync_stamp_path() {
         let sync_stamp_path =
-            get_github_repo_sync_stamp_path(Path::new("/tmp/reqbib-state"), "acme/shared-reqbib")
+            get_github_repo_sync_stamp_path(Path::new("/tmp/combib-state"), "acme/shared-combib")
                 .unwrap();
 
         assert_eq!(
             sync_stamp_path,
-            Path::new("/tmp/reqbib-state").join("acme__shared-reqbib.sync")
+            Path::new("/tmp/combib-state").join("acme__shared-combib.sync")
         );
     }
 
     #[test]
     fn test_maybe_update_github_repo_checkout_with_runner_updates_when_due() {
         let temp_dir = TempDir::new().unwrap();
-        let checkout_path = temp_dir.path().join("acme__shared-reqbib");
+        let checkout_path = temp_dir.path().join("acme__shared-combib");
         let state_root = temp_dir.path().join("state");
         fs::create_dir_all(&checkout_path).unwrap();
 
         let was_updated = maybe_update_github_repo_checkout_with_runner(
-            "acme/shared-reqbib",
+            "acme/shared-combib",
             &checkout_path,
             true,
             Duration::from_secs(DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES * 60),
@@ -305,18 +305,18 @@ mod tests {
         .unwrap();
 
         assert!(was_updated);
-        assert!(state_root.join("acme__shared-reqbib.sync").exists());
+        assert!(state_root.join("acme__shared-combib.sync").exists());
     }
 
     #[test]
     fn test_maybe_update_github_repo_checkout_with_runner_respects_disable_flag() {
         let temp_dir = TempDir::new().unwrap();
-        let checkout_path = temp_dir.path().join("acme__shared-reqbib");
+        let checkout_path = temp_dir.path().join("acme__shared-combib");
         let state_root = temp_dir.path().join("state");
         fs::create_dir_all(&checkout_path).unwrap();
 
         let was_updated = maybe_update_github_repo_checkout_with_runner(
-            "acme/shared-reqbib",
+            "acme/shared-combib",
             &checkout_path,
             false,
             Duration::from_secs(DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES * 60),
@@ -332,15 +332,15 @@ mod tests {
     #[test]
     fn test_maybe_update_github_repo_checkout_with_runner_skips_recent_sync() {
         let temp_dir = TempDir::new().unwrap();
-        let checkout_path = temp_dir.path().join("acme__shared-reqbib");
+        let checkout_path = temp_dir.path().join("acme__shared-combib");
         let state_root = temp_dir.path().join("state");
-        let sync_stamp_path = state_root.join("acme__shared-reqbib.sync");
+        let sync_stamp_path = state_root.join("acme__shared-combib.sync");
         fs::create_dir_all(&checkout_path).unwrap();
         fs::create_dir_all(&state_root).unwrap();
         fs::write(&sync_stamp_path, b"updated").unwrap();
 
         let was_updated = maybe_update_github_repo_checkout_with_runner(
-            "acme/shared-reqbib",
+            "acme/shared-combib",
             &checkout_path,
             true,
             Duration::from_secs(DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES * 60),

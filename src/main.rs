@@ -1,3 +1,3 @@
-fn main() -> reqbib::Result<()> {
-    reqbib::run()
+fn main() -> combib::Result<()> {
+    combib::run()
 }
