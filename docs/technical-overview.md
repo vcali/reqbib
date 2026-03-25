@@ -21,11 +21,13 @@ At a high level, execution is:
 
 1. Build and parse CLI arguments.
 2. Load config from `~/.combib/config.json` or `--config`.
-3. Resolve the active biblioteca from `-b` / `--biblioteca` or `default_biblioteca`.
+3. Resolve the active biblioteca from `-b` / `--biblioteca`, `default_biblioteca`, or the built-in `default` fallback.
 4. Resolve local or shared storage context from the nested `shared_repo` config or CLI overrides.
 5. For GitHub-backed shared mode, ensure a local checkout exists and refresh it if due.
 6. Execute one of the user operations:
    - add
+   - create biblioteca
+   - list bibliotecas
    - list
    - search
 7. Persist updated JSON if the operation mutates storage.
@@ -95,7 +97,9 @@ Default read commands can operate in these modes:
 
 Current behavior:
 
-- the active biblioteca is always explicit or config-backed
+- the active biblioteca is CLI-selected, config-backed, or falls back to the built-in `default`
+- `--create-biblioteca` initializes a biblioteca file explicitly rather than waiting for the first `--add`
+- `--list-bibliotecas` skips active-biblioteca resolution and instead enumerates biblioteca files in the selected scope
 - if `shared_repo.default_team` is configured, non-team list/search defaults to local plus that team
 - if `shared_repo.default_all_teams` is `true`, non-team list/search defaults to local plus all teams
 - otherwise non-team list/search defaults to local only
@@ -103,6 +107,7 @@ Current behavior:
 - `--team` and `--all-teams` stay explicit shared-only modes
 - local entries that exactly duplicate displayed shared entries are hidden from the default combined output
 - `--list` uses a default result cap unless `default_list_limit` or `--limit` overrides it
+- `--list-bibliotecas` is uncapped and groups names by local/shared source, or by team when `--all-teams` is used
 - output uses plain `=== ... ===` section banners with multiline-safe entry blocks, and descriptions render inline after the bracketed index
 
 ## Deliberate Product Constraints

@@ -1,5 +1,6 @@
 use crate::cli::build_cli;
 use crate::config::{
+    list_all_team_bibliotecas, list_local_bibliotecas, list_team_bibliotecas,
     load_all_team_commands, load_team_commands, resolve_active_biblioteca, resolve_config,
     resolve_data_file_path, resolve_shared_storage_context, shared_repository_required_message,
     CombibConfig, DefaultSharedReadTarget, SharedStorageContext,
@@ -47,6 +48,12 @@ struct OutputSummary {
     hidden_local_duplicates: usize,
     hidden_due_to_limit: usize,
     active_limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BibliotecaSection {
+    title: String,
+    bibliotecas: Vec<String>,
 }
 
 impl OutputSection {
@@ -126,8 +133,40 @@ pub fn run() -> Result<()> {
 
     let all_teams = matches.get_flag("all-teams");
     let shared_context = resolve_shared_storage_context(&matches, &config)?;
-    let biblioteca = resolve_active_biblioteca(&matches, &config)?;
-    let data_file = resolve_data_file_path(&matches, shared_context.as_ref(), &biblioteca)?;
+    let list_bibliotecas = matches.get_flag("list-bibliotecas");
+    let biblioteca = if list_bibliotecas {
+        None
+    } else {
+        Some(resolve_target_biblioteca(&matches, &config)?)
+    };
+    let data_file = if let Some(biblioteca) = biblioteca.as_deref() {
+        Some(resolve_data_file_path(
+            &matches,
+            shared_context.as_ref(),
+            biblioteca,
+        )?)
+    } else {
+        None
+    };
+
+    if list_bibliotecas {
+        return list_bibliotecas_for_scope(&matches, &config, shared_context.as_ref());
+    }
+
+    if matches.get_one::<String>("create-biblioteca").is_some() {
+        return create_biblioteca(
+            &matches,
+            data_file
+                .as_deref()
+                .expect("data file should be resolved for biblioteca creation"),
+            biblioteca
+                .as_deref()
+                .expect("biblioteca should be resolved for biblioteca creation"),
+        );
+    }
+
+    let biblioteca = biblioteca.expect("biblioteca should be resolved for command operations");
+    let data_file = data_file.expect("data file should be resolved for command operations");
 
     if let Some(command) = matches.get_one::<String>("add") {
         let description = matches
@@ -305,6 +344,78 @@ fn validate_matches(matches: &clap::ArgMatches) -> Result<()> {
         return Err("--description can only be used with --add.".into());
     }
 
+    if matches.get_flag("list-bibliotecas") {
+        if matches.get_one::<String>("add").is_some()
+            || matches.get_flag("list")
+            || matches.get_one::<String>("create-biblioteca").is_some()
+        {
+            return Err(
+                "--list-bibliotecas cannot be combined with --add, --list, or --create-biblioteca."
+                    .into(),
+            );
+        }
+        if matches.get_one::<String>("description").is_some() {
+            return Err("--description cannot be used with --list-bibliotecas.".into());
+        }
+        if matches.get_one::<usize>("limit").is_some() {
+            return Err("--limit cannot be used with --list-bibliotecas.".into());
+        }
+        if matches.get_one::<String>("biblioteca").is_some() {
+            return Err("--biblioteca cannot be used with --list-bibliotecas.".into());
+        }
+        if matches
+            .get_many::<String>("keywords")
+            .map(|values| values.len() > 0)
+            .unwrap_or(false)
+        {
+            return Err("--list-bibliotecas cannot be combined with search keywords.".into());
+        }
+    }
+
+    if let Some(create_biblioteca) = matches.get_one::<String>("create-biblioteca") {
+        if all_teams {
+            return Err("--all-teams cannot be used with --create-biblioteca.".into());
+        }
+        if local_only || shared_only {
+            return Err(
+                "--local-only and --shared-only cannot be used with --create-biblioteca.".into(),
+            );
+        }
+        if matches.get_one::<String>("add").is_some() || matches.get_flag("list") {
+            return Err("--create-biblioteca cannot be combined with --add or --list.".into());
+        }
+        if matches
+            .get_many::<String>("keywords")
+            .map(|values| values.len() > 0)
+            .unwrap_or(false)
+        {
+            return Err("--create-biblioteca cannot be combined with search keywords.".into());
+        }
+        if matches.get_one::<String>("description").is_some() {
+            return Err("--description cannot be used with --create-biblioteca.".into());
+        }
+        if matches.get_one::<usize>("limit").is_some() {
+            return Err("--limit cannot be used with --create-biblioteca.".into());
+        }
+        if let Some(active_biblioteca) = matches.get_one::<String>("biblioteca") {
+            if active_biblioteca != create_biblioteca {
+                return Err(
+                    "--biblioteca must match --create-biblioteca when both are provided.".into(),
+                );
+            }
+        }
+        if matches.get_one::<String>("repo").is_some()
+            && matches.get_one::<String>("team").is_none()
+        {
+            return Err("--repo requires --team when creating a shared biblioteca.".into());
+        }
+        if matches.get_one::<String>("teams-dir").is_some()
+            && matches.get_one::<String>("team").is_none()
+        {
+            return Err("--teams-dir requires --team when creating a shared biblioteca.".into());
+        }
+    }
+
     if matches.get_one::<String>("add").is_some() {
         if all_teams {
             return Err("--all-teams cannot be used with --add.".into());
@@ -326,6 +437,123 @@ fn validate_matches(matches: &clap::ArgMatches) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn resolve_target_biblioteca(matches: &clap::ArgMatches, config: &CombibConfig) -> Result<String> {
+    if let Some(create_biblioteca) = matches.get_one::<String>("create-biblioteca") {
+        crate::config::validate_biblioteca_name(create_biblioteca)?;
+        Ok(create_biblioteca.clone())
+    } else {
+        resolve_active_biblioteca(matches, config)
+    }
+}
+
+fn create_biblioteca(
+    matches: &clap::ArgMatches,
+    data_file: &std::path::Path,
+    biblioteca: &str,
+) -> Result<()> {
+    if data_file.exists() {
+        println!("Biblioteca '{biblioteca}' already exists.");
+        return Ok(());
+    }
+
+    CommandDatabase::new().save_to_file(data_file)?;
+
+    if let Some(team) = matches.get_one::<String>("team") {
+        println!("Created biblioteca '{biblioteca}' for team '{team}'.");
+    } else {
+        println!("Created biblioteca '{biblioteca}'.");
+    }
+
+    Ok(())
+}
+
+fn list_bibliotecas_for_scope(
+    matches: &clap::ArgMatches,
+    config: &CombibConfig,
+    shared_context: Option<&SharedStorageContext>,
+) -> Result<()> {
+    if let Some(team) = matches.get_one::<String>("team") {
+        let shared_context = shared_context.ok_or(shared_repository_required_message())?;
+        let sections = vec![BibliotecaSection {
+            title: format!("Shared / {team}"),
+            bibliotecas: list_team_bibliotecas(shared_context, team)?,
+        }];
+        print_biblioteca_sections(
+            &sections,
+            &format!("No bibliotecas available for team '{team}'."),
+        );
+        return Ok(());
+    }
+
+    if matches.get_flag("all-teams") {
+        let shared_context = shared_context.ok_or(shared_repository_required_message())?;
+        let sections =
+            sections_from_grouped_team_bibliotecas(list_all_team_bibliotecas(shared_context)?);
+        print_biblioteca_sections(&sections, "No bibliotecas available in shared storage.");
+        return Ok(());
+    }
+
+    let plan = resolve_default_read_plan(matches, config, shared_context)?;
+    let mut sections = Vec::new();
+
+    if plan.include_local {
+        sections.push(BibliotecaSection {
+            title: "Local".to_string(),
+            bibliotecas: list_local_bibliotecas()?,
+        });
+    }
+
+    match plan.shared_target {
+        Some(SharedReadTarget::Team(team)) => {
+            let shared_context = shared_context.ok_or(shared_repository_required_message())?;
+            sections.push(BibliotecaSection {
+                title: format!("Shared / {team}"),
+                bibliotecas: list_team_bibliotecas(shared_context, &team)?,
+            });
+        }
+        Some(SharedReadTarget::AllTeams) => {
+            let shared_context = shared_context.ok_or(shared_repository_required_message())?;
+            sections.extend(sections_from_grouped_team_bibliotecas(
+                list_all_team_bibliotecas(shared_context)?,
+            ));
+        }
+        None => {}
+    }
+
+    print_biblioteca_sections(&sections, "No bibliotecas available.");
+    Ok(())
+}
+
+fn sections_from_grouped_team_bibliotecas(
+    grouped: Vec<(String, String)>,
+) -> Vec<BibliotecaSection> {
+    let mut sections = Vec::new();
+    let mut current_team = None::<String>;
+    let mut current_bibliotecas = Vec::new();
+
+    for (team, biblioteca) in grouped {
+        if current_team.as_deref() != Some(team.as_str()) {
+            if let Some(team_name) = current_team.take() {
+                sections.push(BibliotecaSection {
+                    title: format!("Shared / {team_name}"),
+                    bibliotecas: std::mem::take(&mut current_bibliotecas),
+                });
+            }
+            current_team = Some(team);
+        }
+        current_bibliotecas.push(biblioteca);
+    }
+
+    if let Some(team_name) = current_team {
+        sections.push(BibliotecaSection {
+            title: format!("Shared / {team_name}"),
+            bibliotecas: current_bibliotecas,
+        });
+    }
+
+    sections
 }
 
 fn filter_commands(database: &CommandDatabase, keywords: Option<&[String]>) -> Vec<OutputEntry> {
@@ -589,6 +817,31 @@ fn print_sections(sections: &[OutputSection], empty_message: &str, summary: &Out
 
     if let Some(message) = limit_message {
         println!("{message}");
+    }
+}
+
+fn print_biblioteca_sections(sections: &[BibliotecaSection], empty_message: &str) {
+    let sections: Vec<&BibliotecaSection> = sections
+        .iter()
+        .filter(|section| !section.bibliotecas.is_empty())
+        .collect();
+
+    if sections.is_empty() {
+        println!("{empty_message}");
+        return;
+    }
+
+    for (section_index, section) in sections.iter().enumerate() {
+        if section_index > 0 {
+            println!();
+        }
+
+        println!("{}", format_section_header(&section.title));
+        println!();
+
+        for (index, biblioteca) in section.bibliotecas.iter().enumerate() {
+            println!("[{}] {}", index + 1, biblioteca);
+        }
     }
 }
 

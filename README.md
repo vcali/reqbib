@@ -10,6 +10,9 @@ The name comes from **Command Biblioteca**. It intentionally does not include th
 - Local storage lives under `~/.combib/libs/<biblioteca>.json`
 - Shared storage stays team-based under `<repo>/teams/<team>/libs/<biblioteca>.json`
 - Use `-b` / `--biblioteca` to keep reads and writes scoped and tidy
+- Fall back to a built-in `default` biblioteca when neither CLI nor config selects one
+- Create bibliotecas explicitly with `--create-biblioteca <name>`
+- List available bibliotecas with `--list-bibliotecas`
 - Search by extracted keywords instead of exact text only
 - Use a shared team repository layout with optional GitHub-backed checkouts
 - No shell-history import by design; commands are intentionally curated to avoid noise
@@ -42,7 +45,22 @@ List a biblioteca:
 combib -b curl -l
 ```
 
-If `default_biblioteca` is configured, you can omit `-b` for normal reads and writes.
+List available bibliotecas:
+
+```bash
+combib --list-bibliotecas
+combib --repo /path/to/shared-combib --team platform --list-bibliotecas
+combib --repo /path/to/shared-combib --all-teams --list-bibliotecas
+```
+
+If `default_biblioteca` is configured, you can omit `-b` for normal reads and writes. If it is not configured, `combib` falls back to the built-in `default` biblioteca.
+
+Create a biblioteca explicitly:
+
+```bash
+combib --create-biblioteca git
+combib --repo /path/to/shared-combib --team platform --create-biblioteca aws
+```
 
 ## Team Usage
 

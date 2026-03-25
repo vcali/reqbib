@@ -25,10 +25,22 @@ pub(crate) fn build_cli() -> Command {
                 .help("Active biblioteca name"),
         )
         .arg(
+            Arg::new("create-biblioteca")
+                .long("create-biblioteca")
+                .value_name("NAME")
+                .help("Create a new biblioteca"),
+        )
+        .arg(
             Arg::new("list")
                 .short('l')
                 .long("list")
                 .help("List all stored commands in the active biblioteca")
+                .action(clap::ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("list-bibliotecas")
+                .long("list-bibliotecas")
+                .help("List available bibliotecas in the active scope")
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(

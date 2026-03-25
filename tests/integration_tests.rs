@@ -276,12 +276,13 @@ fn test_help_output() {
         ))
         .stdout(predicate::str::contains("Usage: combib"))
         .stdout(predicate::str::contains("--biblioteca"))
+        .stdout(predicate::str::contains("--list-bibliotecas"))
         .stdout(predicate::str::contains("--list"))
         .stdout(predicate::str::contains("--import").not());
 }
 
 #[test]
-fn test_add_requires_biblioteca_without_default() {
+fn test_add_uses_builtin_default_biblioteca_without_config() {
     let temp_dir = TempDir::new().unwrap();
     let mut cmd = Command::cargo_bin("combib").unwrap();
 
@@ -289,9 +290,16 @@ fn test_add_requires_biblioteca_without_default() {
         .arg("--add")
         .arg("curl https://example.com");
 
-    cmd.assert()
-        .failure()
-        .stderr(predicate::str::contains("No biblioteca selected"));
+    cmd.assert().success().stdout(predicate::str::contains(
+        "Added command to biblioteca 'default': curl https://example.com",
+    ));
+
+    assert!(temp_dir
+        .path()
+        .join(".combib")
+        .join("libs")
+        .join("default.json")
+        .exists());
 }
 
 #[test]
@@ -315,6 +323,168 @@ fn test_add_command_local() {
 
     let content = fs::read_to_string(data_file).unwrap();
     assert!(content.contains("curl https://example.com/test"));
+}
+
+#[test]
+fn test_create_local_biblioteca() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut cmd = Command::cargo_bin("combib").unwrap();
+
+    cmd.env("HOME", temp_dir.path())
+        .args(["--create-biblioteca", "git"]);
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("Created biblioteca 'git'."));
+
+    assert!(temp_dir
+        .path()
+        .join(".combib")
+        .join("libs")
+        .join("git.json")
+        .exists());
+}
+
+#[test]
+fn test_create_biblioteca_in_team_repository() {
+    let temp_dir = TempDir::new().unwrap();
+    let shared_repo = temp_dir.path().join("shared-combib");
+    let mut cmd = Command::cargo_bin("combib").unwrap();
+
+    cmd.env("HOME", temp_dir.path()).args([
+        "--repo",
+        shared_repo.to_str().unwrap(),
+        "--team",
+        "platform",
+        "--create-biblioteca",
+        "aws",
+    ]);
+
+    cmd.assert().success().stdout(predicate::str::contains(
+        "Created biblioteca 'aws' for team 'platform'.",
+    ));
+
+    assert!(shared_repo
+        .join("teams")
+        .join("platform")
+        .join("libs")
+        .join("aws.json")
+        .exists());
+}
+
+#[test]
+fn test_create_biblioteca_rejects_mismatched_active_biblioteca() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut cmd = Command::cargo_bin("combib").unwrap();
+
+    cmd.env("HOME", temp_dir.path())
+        .args(["-b", "curl", "--create-biblioteca", "git"]);
+
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "--biblioteca must match --create-biblioteca when both are provided.",
+    ));
+}
+
+#[test]
+fn test_list_local_bibliotecas() {
+    let temp_dir = TempDir::new().unwrap();
+
+    for biblioteca in ["curl", "git"] {
+        let mut cmd = Command::cargo_bin("combib").unwrap();
+        cmd.env("HOME", temp_dir.path())
+            .args(["--create-biblioteca", biblioteca]);
+        cmd.assert().success();
+    }
+
+    let mut cmd = Command::cargo_bin("combib").unwrap();
+    cmd.env("HOME", temp_dir.path()).arg("--list-bibliotecas");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("=== LOCAL ==="))
+        .stdout(predicate::str::contains("[1] curl"))
+        .stdout(predicate::str::contains("[2] git"));
+}
+
+#[test]
+fn test_list_team_bibliotecas() {
+    let temp_dir = TempDir::new().unwrap();
+    let shared_repo = temp_dir.path().join("shared-combib");
+
+    for biblioteca in ["aws", "curl"] {
+        let mut cmd = Command::cargo_bin("combib").unwrap();
+        cmd.env("HOME", temp_dir.path()).args([
+            "--repo",
+            shared_repo.to_str().unwrap(),
+            "--team",
+            "platform",
+            "--create-biblioteca",
+            biblioteca,
+        ]);
+        cmd.assert().success();
+    }
+
+    let mut cmd = Command::cargo_bin("combib").unwrap();
+    cmd.env("HOME", temp_dir.path()).args([
+        "--repo",
+        shared_repo.to_str().unwrap(),
+        "--team",
+        "platform",
+        "--list-bibliotecas",
+    ]);
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("=== SHARED / PLATFORM ==="))
+        .stdout(predicate::str::contains("[1] aws"))
+        .stdout(predicate::str::contains("[2] curl"));
+}
+
+#[test]
+fn test_list_all_team_bibliotecas() {
+    let temp_dir = TempDir::new().unwrap();
+    let shared_repo = temp_dir.path().join("shared-combib");
+
+    for (team, biblioteca) in [("payments", "curl"), ("platform", "aws")] {
+        let mut cmd = Command::cargo_bin("combib").unwrap();
+        cmd.env("HOME", temp_dir.path()).args([
+            "--repo",
+            shared_repo.to_str().unwrap(),
+            "--team",
+            team,
+            "--create-biblioteca",
+            biblioteca,
+        ]);
+        cmd.assert().success();
+    }
+
+    let mut cmd = Command::cargo_bin("combib").unwrap();
+    cmd.env("HOME", temp_dir.path()).args([
+        "--repo",
+        shared_repo.to_str().unwrap(),
+        "--all-teams",
+        "--list-bibliotecas",
+    ]);
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("=== SHARED / PAYMENTS ==="))
+        .stdout(predicate::str::contains("=== SHARED / PLATFORM ==="))
+        .stdout(predicate::str::contains("[1] curl"))
+        .stdout(predicate::str::contains("[1] aws"));
+}
+
+#[test]
+fn test_list_bibliotecas_rejects_biblioteca_flag() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut cmd = Command::cargo_bin("combib").unwrap();
+
+    cmd.env("HOME", temp_dir.path())
+        .args(["-b", "curl", "--list-bibliotecas"]);
+
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "--biblioteca cannot be used with --list-bibliotecas.",
+    ));
 }
 
 #[test]

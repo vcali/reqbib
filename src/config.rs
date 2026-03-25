@@ -14,9 +14,8 @@ use std::time::Duration;
 
 const SHARED_REPOSITORY_REQUIRED_MESSAGE: &str =
     "No shared repository configured. Use --repo or configure shared_repo in config.";
-const NO_BIBLIOTECA_SELECTED_MESSAGE: &str =
-    "No biblioteca selected. Use -b/--biblioteca or configure default_biblioteca.";
 const LIBS_DIR_NAME: &str = "libs";
+pub(crate) const BUILTIN_DEFAULT_BIBLIOTECA: &str = "default";
 const LEGACY_SHARED_REPO_CONFIG_KEYS: &[&str] = &[
     "github_repo",
     "shared_repo_path",
@@ -348,7 +347,7 @@ pub(crate) fn resolve_active_biblioteca(
     } else if let Some(default_biblioteca) = config.default_biblioteca.as_ref() {
         Ok(default_biblioteca.clone())
     } else {
-        Err(NO_BIBLIOTECA_SELECTED_MESSAGE.into())
+        Ok(BUILTIN_DEFAULT_BIBLIOTECA.to_string())
     }
 }
 
@@ -360,6 +359,13 @@ pub(crate) fn get_local_data_file_path(biblioteca: &str) -> Result<PathBuf> {
     path.push(LIBS_DIR_NAME);
     path.push(format!("{biblioteca}.json"));
     Ok(path)
+}
+
+fn get_local_libs_root() -> PathBuf {
+    let mut path = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    path.push(".combib");
+    path.push(LIBS_DIR_NAME);
+    path
 }
 
 fn get_default_config_file_path() -> PathBuf {
@@ -384,6 +390,36 @@ pub(crate) fn get_team_data_file_path(
         .join(team)
         .join(LIBS_DIR_NAME)
         .join(format!("{biblioteca}.json")))
+}
+
+fn list_bibliotecas_in_dir(dir: &Path) -> Result<Vec<String>> {
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut bibliotecas = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+
+        let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+
+        if validate_biblioteca_name(stem).is_ok() {
+            bibliotecas.push(stem.to_string());
+        }
+    }
+
+    bibliotecas.sort();
+    Ok(bibliotecas)
 }
 
 pub(crate) fn resolve_config(matches: &ArgMatches) -> Result<CombibConfig> {
@@ -471,6 +507,55 @@ pub(crate) fn resolve_data_file_path(
     }
 }
 
+pub(crate) fn list_local_bibliotecas() -> Result<Vec<String>> {
+    list_bibliotecas_in_dir(&get_local_libs_root())
+}
+
+pub(crate) fn list_team_bibliotecas(
+    shared_context: &SharedStorageContext,
+    team: &str,
+) -> Result<Vec<String>> {
+    validate_team_name(team)?;
+    let libs_dir = shared_context
+        .repository_root
+        .join(&shared_context.teams_dir)
+        .join(team)
+        .join(LIBS_DIR_NAME);
+    list_bibliotecas_in_dir(&libs_dir)
+}
+
+pub(crate) fn list_all_team_bibliotecas(
+    shared_context: &SharedStorageContext,
+) -> Result<Vec<(String, String)>> {
+    let teams_root = shared_context
+        .repository_root
+        .join(&shared_context.teams_dir);
+    if !teams_root.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut team_names = Vec::new();
+    for entry in fs::read_dir(&teams_root)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            let team_name = entry.file_name().to_string_lossy().to_string();
+            if validate_team_name(&team_name).is_ok() {
+                team_names.push(team_name);
+            }
+        }
+    }
+    team_names.sort();
+
+    let mut results = Vec::new();
+    for team_name in team_names {
+        for biblioteca in list_team_bibliotecas(shared_context, &team_name)? {
+            results.push((team_name.clone(), biblioteca));
+        }
+    }
+
+    Ok(results)
+}
+
 pub(crate) fn load_all_team_commands(
     shared_context: &SharedStorageContext,
     biblioteca: &str,
@@ -549,9 +634,11 @@ pub(crate) fn shared_repository_required_message() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        get_local_data_file_path, get_team_data_file_path, resolve_active_biblioteca,
+        get_local_data_file_path, get_team_data_file_path, list_all_team_bibliotecas,
+        list_local_bibliotecas, list_team_bibliotecas, resolve_active_biblioteca,
         validate_biblioteca_name, validate_relative_directory, CombibConfig,
         DefaultSharedReadTarget, GithubSharedRepoConfig, PathSharedRepoConfig, SharedRepoConfig,
+        SharedStorageContext, BUILTIN_DEFAULT_BIBLIOTECA,
     };
     use crate::cli::build_cli;
     use crate::github::DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES;
@@ -615,6 +702,112 @@ mod tests {
                 .join("platform")
                 .join("libs")
                 .join("curl.json")
+        );
+    }
+
+    #[test]
+    fn test_list_local_bibliotecas() {
+        let temp_dir = TempDir::new().unwrap();
+        let original_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", temp_dir.path());
+
+        fs::create_dir_all(temp_dir.path().join(".combib").join("libs")).unwrap();
+        fs::write(
+            temp_dir
+                .path()
+                .join(".combib")
+                .join("libs")
+                .join("curl.json"),
+            "{}",
+        )
+        .unwrap();
+        fs::write(
+            temp_dir
+                .path()
+                .join(".combib")
+                .join("libs")
+                .join("git.json"),
+            "{}",
+        )
+        .unwrap();
+        fs::write(
+            temp_dir
+                .path()
+                .join(".combib")
+                .join("libs")
+                .join("README.txt"),
+            "",
+        )
+        .unwrap();
+
+        let bibliotecas = list_local_bibliotecas().unwrap();
+
+        if let Some(home) = original_home {
+            std::env::set_var("HOME", home);
+        } else {
+            std::env::remove_var("HOME");
+        }
+
+        assert_eq!(bibliotecas, vec!["curl".to_string(), "git".to_string()]);
+    }
+
+    #[test]
+    fn test_list_team_bibliotecas() {
+        let temp_dir = TempDir::new().unwrap();
+        let shared_context = SharedStorageContext {
+            repository_root: temp_dir.path().join("shared-combib"),
+            teams_dir: PathBuf::from("teams"),
+        };
+        fs::create_dir_all(
+            shared_context
+                .repository_root
+                .join("teams")
+                .join("platform")
+                .join("libs"),
+        )
+        .unwrap();
+        fs::write(
+            shared_context
+                .repository_root
+                .join("teams")
+                .join("platform")
+                .join("libs")
+                .join("curl.json"),
+            "{}",
+        )
+        .unwrap();
+
+        let bibliotecas = list_team_bibliotecas(&shared_context, "platform").unwrap();
+
+        assert_eq!(bibliotecas, vec!["curl".to_string()]);
+    }
+
+    #[test]
+    fn test_list_all_team_bibliotecas() {
+        let temp_dir = TempDir::new().unwrap();
+        let shared_context = SharedStorageContext {
+            repository_root: temp_dir.path().join("shared-combib"),
+            teams_dir: PathBuf::from("teams"),
+        };
+
+        for (team, biblioteca) in [("payments", "curl"), ("platform", "aws")] {
+            let dir = shared_context
+                .repository_root
+                .join("teams")
+                .join(team)
+                .join("libs");
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join(format!("{biblioteca}.json")), "{}").unwrap();
+        }
+
+        let bibliotecas = list_all_team_bibliotecas(&shared_context).unwrap();
+
+        assert_eq!(
+            bibliotecas,
+            vec![
+                ("payments".to_string(), "curl".to_string()),
+                ("platform".to_string(), "aws".to_string())
+            ]
         );
     }
 
@@ -771,6 +964,17 @@ mod tests {
         assert_eq!(
             resolve_active_biblioteca(&matches, &config).unwrap(),
             "curl"
+        );
+    }
+
+    #[test]
+    fn test_resolve_active_biblioteca_falls_back_to_builtin_default() {
+        let matches = build_cli().try_get_matches_from(["combib", "-l"]).unwrap();
+        let config = CombibConfig::default();
+
+        assert_eq!(
+            resolve_active_biblioteca(&matches, &config).unwrap(),
+            BUILTIN_DEFAULT_BIBLIOTECA
         );
     }
 }

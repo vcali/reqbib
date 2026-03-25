@@ -92,7 +92,7 @@ combib --config /path/to/config.json ...
 
 Supported top-level keys:
 
-- `default_biblioteca`: optional default biblioteca for normal reads and writes
+- `default_biblioteca`: optional default biblioteca for normal reads and writes. If omitted, `combib` falls back to the built-in `default` biblioteca
 - `shared_repo`: shared repository configuration
 - `default_list_limit`: optional default limit for `--list`. `0` means unlimited. If omitted, `combib` defaults to `20`
 
@@ -128,6 +128,8 @@ Precedence:
 - `-a`, `--add <COMMAND>`: add a command to the active storage target
 - `--description <TEXT>`: optional brief description for `--add`
 - `-b`, `--biblioteca <NAME>`: active biblioteca
+- `--create-biblioteca <NAME>`: create a new biblioteca in the active local or team-scoped target
+- `--list-bibliotecas`: list available bibliotecas in the active local or shared scope
 - `-l`, `--list`: list commands in the active biblioteca
 - `<keywords...>`: search for commands by keyword in the active biblioteca
 
@@ -155,7 +157,21 @@ Biblioteca names may contain only:
 - underscores
 - hyphens
 
-`combib` requires an active biblioteca for add, list, and search. You can supply it explicitly with `-b` / `--biblioteca`, or configure `default_biblioteca`.
+`combib` always resolves an active biblioteca for add, list, and search:
+
+- CLI `-b` / `--biblioteca`
+- `default_biblioteca` from config
+- built-in fallback: `default`
+
+`--create-biblioteca <NAME>` creates the requested biblioteca file explicitly and exits. If the biblioteca already exists, `combib` reports that and does not overwrite it.
+
+`--list-bibliotecas` does not resolve an active biblioteca. It lists biblioteca names for the selected scope:
+
+- no shared flags: local bibliotecas, plus configured default shared scope if one applies
+- `--team <TEAM>`: bibliotecas for that team only
+- `--all-teams`: bibliotecas grouped by team
+- `--local-only`: local bibliotecas only
+- `--shared-only`: shared bibliotecas for the configured default shared scope
 
 ## Shared Mode Rules
 
@@ -170,6 +186,8 @@ Biblioteca names may contain only:
 - `--repo` and `--teams-dir` still require `--team` for write commands
 - `--description` can only be used with `--add`
 - `--limit` can only be used with `--list`
+- `--biblioteca` cannot be used with `--list-bibliotecas`
+- `--list-bibliotecas` cannot be combined with `--add`, `--list`, `--create-biblioteca`, `--description`, `--limit`, or search keywords
 
 Team names follow the same character rules as bibliotecas.
 
@@ -233,6 +251,8 @@ When local and shared output are shown together, `combib` hides local entries wh
 
 `--list` output is limited by default. `combib` shows the first `20` commands unless `default_list_limit` or `--limit` changes that behavior.
 
+`--list-bibliotecas` prints one name per line inside source-grouped sections. Team-wide output uses `Shared / <team>` headers because biblioteca names are the payload.
+
 ## Examples
 
 Local add and search:
@@ -247,6 +267,28 @@ Default biblioteca search when `default_biblioteca` is configured:
 
 ```bash
 combib github octocat
+```
+
+Built-in fallback without config:
+
+```bash
+combib --add "curl https://example.com/health"
+combib -l
+```
+
+Create a biblioteca explicitly:
+
+```bash
+combib --create-biblioteca git
+combib --repo /path/to/shared-combib --team platform --create-biblioteca aws
+```
+
+List available bibliotecas:
+
+```bash
+combib --list-bibliotecas
+combib --repo /path/to/shared-combib --team platform --list-bibliotecas
+combib --repo /path/to/shared-combib --all-teams --list-bibliotecas
 ```
 
 Local-only override:
