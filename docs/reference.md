@@ -2,6 +2,14 @@
 
 This document covers configuration, CLI parameters, storage modes, and the current GitHub-backed shared repository workflow.
 
+## Installation
+
+Install the latest release with Homebrew:
+
+```bash
+brew install --formula https://github.com/vcali/reqbib/releases/latest/download/combib.rb
+```
+
 ## Storage Modes
 
 ### Local mode

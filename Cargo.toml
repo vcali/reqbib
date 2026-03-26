@@ -2,6 +2,10 @@
 name = "combib"
 version = "0.1.0"
 edition = "2021"
+description = "CLI for storing, searching, and sharing reusable shell commands"
+license = "MIT"
+repository = "https://github.com/vcali/reqbib"
+homepage = "https://github.com/vcali/reqbib"
 
 [dependencies]
 clap = { version = "4.0", features = ["derive"] }

@@ -16,6 +16,7 @@ jobs:
     name: Prepare Release Metadata
     runs-on: ubuntu-latest
     outputs:
+      version: ${{ steps.metadata.outputs.version }}
       tag_name: ${{ steps.metadata.outputs.tag_name }}
       release_name: ${{ steps.metadata.outputs.release_name }}
 
@@ -31,6 +32,7 @@ jobs:
           tag_name="v${version}-build.${GITHUB_RUN_NUMBER}"
           release_name="combib ${version} build ${GITHUB_RUN_NUMBER}"
 
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
           echo "tag_name=${tag_name}" >> "${GITHUB_OUTPUT}"
           echo "release_name=${release_name}" >> "${GITHUB_OUTPUT}"
 
@@ -90,11 +92,24 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Download packaged artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+
+      - name: Generate Homebrew formula
+        shell: bash
+        run: |
+          bash scripts/generate-homebrew-formula.sh \
+            --repo "${{ github.repository }}" \
+            --version "${{ needs.metadata.outputs.version }}" \
+            --tag "${{ needs.metadata.outputs.tag_name }}" \
+            --dist-dir dist \
+            --output dist/combib.rb
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2

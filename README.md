@@ -19,6 +19,12 @@ The name comes from **Command Biblioteca**. It intentionally does not include th
 
 ## Quick Start
 
+Install with Homebrew from the latest GitHub release:
+
+```bash
+brew install --formula https://github.com/vcali/reqbib/releases/latest/download/combib.rb
+```
+
 Add a command locally:
 
 ```bash
@@ -143,6 +149,7 @@ Pushes to `main` publish a GitHub Release automatically.
 
 - Tags use the format `v<crate-version>-build.<run_number>`
 - Release assets currently include:
+  - `combib.rb` for direct Homebrew installs
   - `combib-x86_64-unknown-linux-gnu.tar.gz`
   - `combib-x86_64-apple-darwin.tar.gz`
   - `combib-aarch64-apple-darwin.tar.gz`

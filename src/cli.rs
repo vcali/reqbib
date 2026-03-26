@@ -3,7 +3,7 @@ use clap::{Arg, Command};
 pub(crate) fn build_cli() -> Command {
     Command::new("combib")
         .about("A CLI tool for storing and sharing command bibliotecas")
-        .version("0.1.0")
+        .version(env!("CARGO_PKG_VERSION"))
         .arg(
             Arg::new("add")
                 .short('a')
