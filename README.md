@@ -1,109 +1,123 @@
-# reqbib
+# combib
 
-ReqBib is a CLI for storing, searching, and sharing `curl` commands.
+`combib` is a CLI for storing, searching, and sharing reusable shell commands.
 
-The name comes from **Requests Biblioteca**: a library of useful HTTP requests for individuals and teams.
+The name comes from **Command Biblioteca**. It intentionally does not include the word `library`, to avoid confusion with software/code libraries.
 
 ## Highlights
 
-- Store `curl` commands locally in `~/.reqbib/commands.json`
-- Add an optional short description to each stored command
-- Import commands from shell history with `-i`
+- Store any command in an explicit biblioteca such as `curl`, `git`, `aws`, or `kubectl`
+- Local storage lives under `~/.combib/libs/<biblioteca>.json`
+- Shared storage stays team-based under `<repo>/teams/<team>/libs/<biblioteca>.json`
+- Use `-b` / `--biblioteca` to keep reads and writes scoped and tidy
+- Fall back to a built-in `default` biblioteca when neither CLI nor config selects one
+- Create bibliotecas explicitly with `--create-biblioteca <name>`
+- List available bibliotecas with `--list-bibliotecas`
 - Search by extracted keywords instead of exact text only
-- Use a shared team repository layout with GitHub-backed checkouts
-- Add a default shared team so normal search and list commands can include local plus your team
-- Search across all teams in a shared repository with `--all-teams`
+- Use a shared team repository layout with optional GitHub-backed checkouts
+- No shell-history import by design; commands are intentionally curated to avoid noise
 
 ## Quick Start
 
 Add a command locally:
 
 ```bash
-reqbib -a "curl -I https://api.github.com/users/octocat"
+combib -b curl -a "curl -I https://api.github.com/users/octocat"
 ```
 
 Add a command with a short description:
 
 ```bash
-reqbib -a "curl -I https://api.github.com/users/octocat" \
-  --description "Fetch the Octocat profile headers"
+combib -b git -a "git log --oneline --graph -20" \
+  --description "Compact recent history graph"
 ```
 
-Search locally:
+Search within a biblioteca:
 
 ```bash
-reqbib github octocat
+combib -b curl github octocat
+combib -b aws s3
 ```
 
-If `shared_repo.default_team` is configured, that default search includes local commands plus your team. Use `--local-only`, `--shared-only`, or `--all-teams` when you want a different scope.
-
-List everything:
+List a biblioteca:
 
 ```bash
-reqbib -l
+combib -b curl -l
 ```
 
-Import from shell history:
+List available bibliotecas:
 
 ```bash
-reqbib -i
+combib --list-bibliotecas
+combib --repo /path/to/shared-combib --team platform --list-bibliotecas
+combib --repo /path/to/shared-combib --all-teams --list-bibliotecas
+```
+
+If `default_biblioteca` is configured, you can omit `-b` for normal reads and writes. If it is not configured, `combib` falls back to the built-in `default` biblioteca.
+
+Create a biblioteca explicitly:
+
+```bash
+combib --create-biblioteca git
+combib --repo /path/to/shared-combib --team platform --create-biblioteca aws
 ```
 
 ## Team Usage
 
-ReqBib can also work against a shared repository with one folder per team:
+Shared storage keeps ownership at the team level and organization at the biblioteca level:
 
 ```text
-shared-reqbib/
+shared-combib/
   teams/
     platform/
-      commands.json
+      libs/
+        curl.json
+        aws.json
     payments/
-      commands.json
+      libs/
+        curl.json
 ```
 
 Basic team-scoped usage:
 
 ```bash
-reqbib --repo /path/to/shared-reqbib --team platform -a \
+combib --repo /path/to/shared-combib --team platform -b curl -a \
   "curl https://api.example.com/platform/health"
 
-reqbib --repo /path/to/shared-reqbib --team platform -l
+combib --repo /path/to/shared-combib --team platform -b curl -l
 ```
 
-Cross-team search:
+Cross-team search within one biblioteca:
 
 ```bash
-reqbib --repo /path/to/shared-reqbib --all-teams stripe webhook
+combib --repo /path/to/shared-combib --all-teams -b curl stripe webhook
 ```
 
-Default local-plus-team output is grouped by source and preserves multiline commands:
+Default local-plus-team output is grouped by source:
 
 ```text
-=== LOCAL ===
+=== LOCAL / CURL ===
 
 [1] Fetch Octocat profile
 curl https://api.github.com/users/octocat
 
-=== SHARED / PLATFORM ===
+=== SHARED / PLATFORM / CURL ===
 
 [1] Platform health check
 curl -X POST https://api.example.com/platform/health \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-GitHub-backed shared usage requires:
-
-- `gh` installed and authenticated
-- `git` available locally
+## Config
 
 Minimal GitHub-backed config:
 
 ```json
 {
+  "default_biblioteca": "curl",
   "shared_repo": {
     "mode": "github",
-    "github_repo": "acme/shared-reqbib",
+    "github_repo": "acme/shared-combib",
     "teams_dir": "teams",
     "default_team": "platform",
     "auto_update_repo": true,
@@ -112,6 +126,11 @@ Minimal GitHub-backed config:
   "default_list_limit": 20
 }
 ```
+
+GitHub-backed shared usage requires:
+
+- `gh` installed and authenticated
+- `git` available locally
 
 ## Documentation
 
@@ -124,14 +143,14 @@ Pushes to `main` publish a GitHub Release automatically.
 
 - Tags use the format `v<crate-version>-build.<run_number>`
 - Release assets currently include:
-  - `reqbib-x86_64-unknown-linux-gnu.tar.gz`
-  - `reqbib-x86_64-apple-darwin.tar.gz`
-  - `reqbib-aarch64-apple-darwin.tar.gz`
+  - `combib-x86_64-unknown-linux-gnu.tar.gz`
+  - `combib-x86_64-apple-darwin.tar.gz`
+  - `combib-aarch64-apple-darwin.tar.gz`
   - matching `.sha256` checksum files
 
 ## Sensitive Data
 
-ReqBib stores commands as provided. If a command contains live tokens, cookies, or other credentials, shared repository mode can expose them to teammates or commit history. Secret detection and redaction are planned but not implemented yet.
+`combib` stores commands as provided. If a command contains live tokens, cookies, or other credentials, shared repository mode can expose them to teammates or commit history. Secret detection and redaction are still planned, not implemented.
 
 ## Development
 
@@ -144,5 +163,5 @@ cargo build
 Run locally during development:
 
 ```bash
-cargo run -- -l
+cargo run -- -b curl -l
 ```

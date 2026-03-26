@@ -103,13 +103,13 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact-name: reqbib-linux
+            artifact-name: combib-linux
           # Temporarily disabled Windows builds due to slow performance
           # TODO: Re-enable when we find a faster Windows runner or pre-built image
           # - os: windows-latest
-          #   artifact-name: reqbib-windows
+          #   artifact-name: combib-windows
           - os: macos-latest
-            artifact-name: reqbib-macos
+            artifact-name: combib-macos
         
     steps:
     - name: Checkout code
@@ -129,5 +129,5 @@ jobs:
       with:
         name: ${{ matrix.artifact-name }}
         path: |
-          target/release/reqbib${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+          target/release/combib${{ matrix.os == 'windows-latest' && '.exe' || '' }}
         if-no-files-found: error

@@ -1,4 +1,4 @@
-# ReqBib Reference
+# combib Reference
 
 This document covers configuration, CLI parameters, storage modes, and the current GitHub-backed shared repository workflow.
 
@@ -6,33 +6,39 @@ This document covers configuration, CLI parameters, storage modes, and the curre
 
 ### Local mode
 
-Default storage path:
+Local storage is biblioteca-based:
 
 ```text
-~/.reqbib/commands.json
+~/.combib/
+  libs/
+    curl.json
+    git.json
+    aws.json
 ```
 
 Use local mode when you do not pass `--team` or `--all-teams`.
 
-If `shared_repo.default_team` is configured, default `reqbib -l` and `reqbib <keywords...>` reads include local commands plus that team. If `shared_repo.default_all_teams` is `true`, default reads include local commands plus every team.
-
 ### Shared repository mode
 
-Shared mode stores commands under a repository layout like this:
+Shared mode keeps ownership by team and organization by biblioteca:
 
 ```text
-shared-reqbib/
+shared-combib/
   teams/
     platform/
-      commands.json
+      libs/
+        curl.json
+        aws.json
     payments/
-      commands.json
+      libs/
+        curl.json
 ```
 
 Shared mode is activated when:
 
 - `--team <team>` is used
 - `--all-teams` is used
+- or a default shared target is configured and you use default read commands
 
 Repository resolution order:
 
@@ -45,22 +51,23 @@ Repository resolution order:
 Default config location:
 
 ```text
-~/.reqbib/config.json
+~/.combib/config.json
 ```
 
 You can override that with:
 
 ```bash
-reqbib --config /path/to/config.json ...
+combib --config /path/to/config.json ...
 ```
 
 ### Path mode
 
 ```json
 {
+  "default_biblioteca": "curl",
   "shared_repo": {
     "mode": "path",
-    "path": "/Users/alice/src/shared-reqbib",
+    "path": "/Users/alice/src/shared-combib",
     "teams_dir": "teams"
   }
 }
@@ -70,9 +77,10 @@ reqbib --config /path/to/config.json ...
 
 ```json
 {
+  "default_biblioteca": "curl",
   "shared_repo": {
     "mode": "github",
-    "github_repo": "acme/shared-reqbib",
+    "github_repo": "acme/shared-combib",
     "teams_dir": "teams",
     "default_team": "platform",
     "auto_update_repo": true,
@@ -81,6 +89,12 @@ reqbib --config /path/to/config.json ...
   "default_list_limit": 20
 }
 ```
+
+Supported top-level keys:
+
+- `default_biblioteca`: optional default biblioteca for normal reads and writes. If omitted, `combib` falls back to the built-in `default` biblioteca
+- `shared_repo`: shared repository configuration
+- `default_list_limit`: optional default limit for `--list`. `0` means unlimited. If omitted, `combib` defaults to `20`
 
 Supported keys inside `shared_repo`:
 
@@ -93,16 +107,12 @@ Supported keys inside `shared_repo`:
 - `auto_update_repo`: GitHub mode only. Defaults to `true`
 - `auto_update_interval_minutes`: GitHub mode only. Defaults to `15` and must be greater than `0`
 
-Supported top-level keys:
-
-- `shared_repo`: shared repository configuration
-- `default_list_limit`: optional default limit for `--list`. `0` means unlimited. If omitted, ReqBib defaults to `20`
-
 Validation rules:
 
 - `mode = "path"` requires `path` and rejects `github_repo`, `auto_update_repo`, and `auto_update_interval_minutes`
 - `mode = "github"` requires `github_repo` and rejects `path`
 - `default_team` and `default_all_teams = true` cannot be configured together
+- `default_biblioteca` must use the normal biblioteca naming rules
 - flat legacy config keys such as `github_repo`, `shared_repo_path`, `teams_dir`, and `auto_update_repo` at the top level are rejected
 
 Precedence:
@@ -115,44 +125,31 @@ Precedence:
 
 ### Core operations
 
-- `-a`, `--add <CURL_COMMAND>`: add a command to the active storage target
+- `-a`, `--add <COMMAND>`: add a command to the active storage target
 - `--description <TEXT>`: optional brief description for `--add`
-- `-i`, `--import`: import `curl` commands from shell history
-- `-l`, `--list`: list commands in the active storage target
-- `<keywords...>`: search for commands by keyword
+- `-b`, `--biblioteca <NAME>`: active biblioteca
+- `--create-biblioteca <NAME>`: create a new biblioteca in the active local or team-scoped target
+- `--list-bibliotecas`: list available bibliotecas in the active local or shared scope
+- `-l`, `--list`: list commands in the active biblioteca
+- `<keywords...>`: search for commands by keyword in the active biblioteca
 
 ### Shared repository options
 
 - `--repo <PATH>`: path to a shared repository checkout
 - `--team <TEAM>`: target a single team folder
 - `--teams-dir <PATH>`: relative path to the teams directory within the repo
-- `--all-teams`: list or search across every team in the repository
+- `--all-teams`: list or search across every team in the same biblioteca
 - `--local-only`: limit default list/search commands to local storage
 - `--shared-only`: limit default list/search commands to shared storage
 - `--limit <COUNT>`: limit how many commands are shown with `--list`. `0` means unlimited
 
 ### Configuration option
 
-- `--config <PATH>`: use a non-default ReqBib config file
+- `--config <PATH>`: use a non-default `combib` config file
 
-## Shared Mode Rules
+## Biblioteca Rules
 
-- `--team` and `--all-teams` cannot be used together
-- `--local-only` and `--shared-only` cannot be used together
-- `--all-teams` is read-only
-- `--all-teams` cannot be used with `--add`
-- `--all-teams` cannot be used with `--import`
-- `--repo` and `--teams-dir` may be used for default read commands without `--team`
-- `--repo` and `--teams-dir` still require `--team` for write commands
-- `--description` can only be used with `--add`
-- `--local-only` and `--shared-only` are read-only controls and cannot be used with `--add` or `--import`
-- `--local-only` and `--shared-only` cannot be used with `--team` or `--all-teams`
-- `--shared-only` without `--team` or `--all-teams` requires `shared_repo.default_team` or `shared_repo.default_all_teams`
-- `--limit` can only be used with `--list`
-
-## Team Naming Rules
-
-Team names may contain only:
+Biblioteca names may contain only:
 
 - letters
 - numbers
@@ -160,11 +157,45 @@ Team names may contain only:
 - underscores
 - hyphens
 
+`combib` always resolves an active biblioteca for add, list, and search:
+
+- CLI `-b` / `--biblioteca`
+- `default_biblioteca` from config
+- built-in fallback: `default`
+
+`--create-biblioteca <NAME>` creates the requested biblioteca file explicitly and exits. If the biblioteca already exists, `combib` reports that and does not overwrite it.
+
+`--list-bibliotecas` does not resolve an active biblioteca. It lists biblioteca names for the selected scope:
+
+- no shared flags: local bibliotecas, plus configured default shared scope if one applies
+- `--team <TEAM>`: bibliotecas for that team only
+- `--all-teams`: bibliotecas grouped by team
+- `--local-only`: local bibliotecas only
+- `--shared-only`: shared bibliotecas for the configured default shared scope
+
+## Shared Mode Rules
+
+- `--team` and `--all-teams` cannot be used together
+- `--local-only` and `--shared-only` cannot be used together
+- `--all-teams` is read-only
+- `--all-teams` cannot be used with `--add`
+- `--local-only` and `--shared-only` are read-only controls and cannot be used with `--add`
+- `--local-only` and `--shared-only` cannot be used with `--team` or `--all-teams`
+- `--shared-only` without `--team` or `--all-teams` requires `shared_repo.default_team` or `shared_repo.default_all_teams`
+- `--repo` and `--teams-dir` may be used for default read commands without `--team`
+- `--repo` and `--teams-dir` still require `--team` for write commands
+- `--description` can only be used with `--add`
+- `--limit` can only be used with `--list`
+- `--biblioteca` cannot be used with `--list-bibliotecas`
+- `--list-bibliotecas` cannot be combined with `--add`, `--list`, `--create-biblioteca`, `--description`, `--limit`, or search keywords
+
+Team names follow the same character rules as bibliotecas.
+
 The teams directory must be a relative path and cannot contain `.` or `..` components.
 
 ## GitHub Integration
 
-Current GitHub integration is checkout-based. ReqBib does not create commits, push changes, or manage authentication on its own.
+Current GitHub integration is checkout-based. `combib` does not create commits, push changes, or manage authentication on its own.
 
 Requirements:
 
@@ -174,101 +205,112 @@ Requirements:
 
 Behavior:
 
-- if `shared_repo.mode` is `github`, ReqBib clones into `~/.reqbib/repos/<owner>__<repo>`
+- if `shared_repo.mode` is `github`, `combib` clones into `~/.combib/repos/<owner>__<repo>`
 - managed checkouts are refreshed with `git pull --ff-only`
 - refresh runs at most once per `auto_update_interval_minutes`
 - set `auto_update_repo` to `false` to disable refresh entirely
 
 ## Search Behavior
 
-ReqBib extracts and indexes keywords from:
+`combib` extracts and indexes keywords from:
 
 - domains and subdomains
 - URL path segments
 - HTTP methods
 - header names and values
 - other meaningful words in the command
+- description text
 
 Search is case-insensitive and supports multiple keywords.
 
-Description text is indexed too, so searches can match either the raw command or its optional description.
+For non-HTTP commands, keyword extraction falls back to generic tokenization.
 
 ## Output Format
 
-Read results are grouped by source:
+Read results are grouped by source and biblioteca:
 
-- `Local`
-- `Shared / <team>`
+- `Local / <biblioteca>`
+- `Shared / <team> / <biblioteca>`
 
 Entries are rendered in multiline-safe blocks. If an entry has a description, it is shown after the bracketed index:
 
 ```text
-=== LOCAL ===
+=== LOCAL / CURL ===
 
 [1] Fetch Octocat profile
 curl https://api.github.com/users/octocat
 
-=== SHARED / PLATFORM ===
+=== SHARED / PLATFORM / CURL ===
 
 [1] Platform health check
 curl -X POST https://api.example.com/platform/health \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-When local and shared output are shown together, ReqBib hides local entries whose command text exactly matches one of the displayed shared entries. A summary line reports how many local entries were hidden.
+When local and shared output are shown together, `combib` hides local entries whose command text exactly matches one of the displayed shared entries. A summary line reports how many local entries were hidden.
 
-`--list` output is also limited by default. ReqBib shows the first `20` commands unless `default_list_limit` or `--limit` changes that behavior.
+`--list` output is limited by default. `combib` shows the first `20` commands unless `default_list_limit` or `--limit` changes that behavior.
+
+`--list-bibliotecas` prints one name per line inside source-grouped sections. Team-wide output uses `Shared / <team>` headers because biblioteca names are the payload.
 
 ## Examples
 
 Local add and search:
 
 ```bash
-reqbib -a "curl https://api.github.com/users/octocat"
-reqbib -a "curl https://api.github.com/users/octocat" --description "Fetch Octocat profile"
-reqbib github octocat
+combib -b curl -a "curl https://api.github.com/users/octocat"
+combib -b curl -a "curl https://api.github.com/users/octocat" --description "Fetch Octocat profile"
+combib -b curl github octocat
 ```
 
-Default local + default-team search when `shared_repo.default_team` is configured:
+Default biblioteca search when `default_biblioteca` is configured:
 
 ```bash
-reqbib health
+combib github octocat
+```
+
+Built-in fallback without config:
+
+```bash
+combib --add "curl https://example.com/health"
+combib -l
+```
+
+Create a biblioteca explicitly:
+
+```bash
+combib --create-biblioteca git
+combib --repo /path/to/shared-combib --team platform --create-biblioteca aws
+```
+
+List available bibliotecas:
+
+```bash
+combib --list-bibliotecas
+combib --repo /path/to/shared-combib --team platform --list-bibliotecas
+combib --repo /path/to/shared-combib --all-teams --list-bibliotecas
 ```
 
 Local-only override:
 
 ```bash
-reqbib --local-only health
+combib --local-only -b curl health
 ```
 
 Shared-only override:
 
 ```bash
-reqbib --shared-only health
+combib --shared-only -b curl health
 ```
 
 Explicit all-team read:
 
 ```bash
-reqbib --all-teams health
+combib --all-teams -b curl health
 ```
 
 Single-team listing:
 
 ```bash
-reqbib --repo /path/to/shared-reqbib --team platform -l
+combib --repo /path/to/shared-combib --team platform -b curl -l
 ```
-
-Cross-team listing:
-
-```bash
-reqbib --repo /path/to/shared-reqbib --all-teams -l
-```
-
-GitHub-configured usage:
-
-```bash
-reqbib --team platform -l
-```
-
-That last example assumes `~/.reqbib/config.json` already provides a `shared_repo` configuration.

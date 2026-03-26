@@ -5,7 +5,6 @@ mod cli;
 mod config;
 mod database;
 mod github;
-mod history;
 mod keywords;
 
 pub use app::run;

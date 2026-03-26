@@ -1,0 +1,4 @@
+interface:
+  display_name: "combib Command Biblioteca"
+  short_description: "Search and reuse stored project commands"
+  default_prompt: "Use $combib to find a saved command before inventing one."
