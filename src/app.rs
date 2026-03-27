@@ -1,9 +1,9 @@
 use crate::cli::build_cli;
 use crate::config::{
-    list_all_team_shelves, list_local_shelves, list_team_shelves, load_all_team_commands,
-    load_team_commands, resolve_active_shelf, resolve_config, resolve_data_file_path,
-    resolve_shared_storage_context, shared_repository_required_message, DefaultSharedReadTarget,
-    SharedStorageContext, ShellshelfConfig,
+    get_local_data_file_path, list_all_team_shelves, list_local_shelves, list_team_shelves,
+    load_all_team_commands, load_team_commands, resolve_active_shelf, resolve_config,
+    resolve_data_file_path, resolve_shared_storage_context, shared_repository_required_message,
+    DefaultSharedReadTarget, SharedStorageContext, ShellshelfConfig,
 };
 use crate::database::{CommandDatabase, StoredCommand};
 use crate::Result;
@@ -130,14 +130,26 @@ pub fn run() -> Result<()> {
     let matches = build_cli().get_matches();
     let config = resolve_config(&matches)?;
     validate_matches(&matches)?;
+    let add_command = matches.get_one::<String>("add");
+    let list_commands = matches.get_flag("list");
+    let search_keywords: Option<Vec<String>> = matches
+        .get_many::<String>("keywords")
+        .map(|keywords| keywords.cloned().collect());
 
     let all_teams = matches.get_flag("all-teams");
     let shared_context = resolve_shared_storage_context(&matches, &config)?;
     let list_shelves = matches.get_flag("list-shelves");
+    let needs_resolved_shelf = !list_shelves
+        && (matches.get_one::<String>("create-shelf").is_some()
+            || add_command.is_some()
+            || list_commands
+            || matches.get_one::<String>("shelf").is_some());
     let shelf = if list_shelves {
         None
-    } else {
+    } else if needs_resolved_shelf {
         Some(resolve_target_shelf(&matches, &config)?)
+    } else {
+        None
     };
     let data_file = if let Some(shelf) = shelf.as_deref() {
         Some(resolve_data_file_path(
@@ -165,18 +177,21 @@ pub fn run() -> Result<()> {
         );
     }
 
-    let shelf = shelf.expect("shelf should be resolved for command operations");
-    let data_file = data_file.expect("data file should be resolved for command operations");
-
-    if let Some(command) = matches.get_one::<String>("add") {
+    if let Some(command) = add_command {
+        let shelf = shelf
+            .as_deref()
+            .expect("shelf should be resolved for add operations");
+        let data_file = data_file
+            .as_deref()
+            .expect("data file should be resolved for add operations");
         let description = matches
             .get_one::<String>("description")
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
-        let mut db = CommandDatabase::load_from_file(&data_file)?;
+        let mut db = CommandDatabase::load_from_file(data_file)?;
         let added = db.add_command(command.clone(), description.clone());
         if added {
-            db.save_to_file(&data_file)?;
+            db.save_to_file(data_file)?;
             match description {
                 Some(description) => {
                     println!("Added command to shelf '{shelf}': {command} ({description})");
@@ -189,18 +204,21 @@ pub fn run() -> Result<()> {
         return Ok(());
     }
 
-    if matches.get_flag("list") {
-        let list_keywords: Option<Vec<String>> = matches
-            .get_many::<String>("keywords")
-            .map(|keywords| keywords.cloned().collect());
+    if list_commands {
+        let shelf = shelf
+            .as_deref()
+            .expect("shelf should be resolved for list operations");
+        let data_file = data_file
+            .as_deref()
+            .expect("data file should be resolved for list operations");
         let limit = resolve_list_limit(&matches, &config);
 
         if let Some(team) = matches.get_one::<String>("team") {
-            let commands = CommandDatabase::load_from_file(&data_file)?;
+            let commands = CommandDatabase::load_from_file(data_file)?;
             let mut sections = vec![OutputSection::shared_team(
                 team.clone(),
-                shelf.clone(),
-                filter_commands(&commands, list_keywords.as_deref()),
+                shelf.to_string(),
+                filter_commands(&commands, search_keywords.as_deref()),
             )];
             let summary = OutputSummary {
                 hidden_due_to_limit: apply_list_limit(&mut sections, limit),
@@ -209,7 +227,7 @@ pub fn run() -> Result<()> {
             };
             print_sections(
                 &sections,
-                &empty_message(list_keywords.is_some(), &shelf),
+                &empty_message(search_keywords.is_some(), Some(shelf)),
                 &summary,
             );
             return Ok(());
@@ -221,8 +239,8 @@ pub fn run() -> Result<()> {
                     .as_ref()
                     .ok_or(shared_repository_required_message())?,
                 &SharedReadTarget::AllTeams,
-                &shelf,
-                list_keywords.as_deref(),
+                shelf,
+                search_keywords.as_deref(),
             )?;
             let summary = OutputSummary {
                 hidden_due_to_limit: apply_list_limit(&mut sections, limit),
@@ -231,19 +249,19 @@ pub fn run() -> Result<()> {
             };
             print_sections(
                 &sections,
-                &empty_message(list_keywords.is_some(), &shelf),
+                &empty_message(search_keywords.is_some(), Some(shelf)),
                 &summary,
             );
             return Ok(());
         }
 
-        let local_db = CommandDatabase::load_from_file(&data_file)?;
+        let local_db = CommandDatabase::load_from_file(data_file)?;
         let plan = resolve_default_read_plan(&matches, &config, shared_context.as_ref())?;
         let (mut sections, hidden_local_duplicates) = load_default_read_sections(
             &local_db,
             shared_context.as_ref(),
-            &shelf,
-            list_keywords.as_deref(),
+            shelf,
+            search_keywords.as_deref(),
             &plan,
         )?;
         let mut summary = OutputSummary {
@@ -254,62 +272,82 @@ pub fn run() -> Result<()> {
         summary.hidden_due_to_limit = apply_list_limit(&mut sections, limit);
         print_sections(
             &sections,
-            &empty_message(list_keywords.is_some(), &shelf),
+            &empty_message(search_keywords.is_some(), Some(shelf)),
             &summary,
         );
         return Ok(());
     }
 
-    if let Some(keywords) = matches.get_many::<String>("keywords") {
-        let keyword_vec: Vec<String> = keywords.cloned().collect();
+    if let Some(keyword_vec) = search_keywords.as_deref() {
+        if let Some(shelf) = shelf.as_deref() {
+            if let Some(team) = matches.get_one::<String>("team") {
+                let data_file = data_file
+                    .as_deref()
+                    .expect("data file should be resolved for team shelf search");
+                let commands = CommandDatabase::load_from_file(data_file)?;
+                let sections = vec![OutputSection::shared_team(
+                    team.clone(),
+                    shelf.to_string(),
+                    filter_commands(&commands, Some(keyword_vec)),
+                )];
+                print_sections(
+                    &sections,
+                    &empty_message(true, Some(shelf)),
+                    &OutputSummary::default(),
+                );
+                return Ok(());
+            }
 
-        if let Some(team) = matches.get_one::<String>("team") {
-            let commands = CommandDatabase::load_from_file(&data_file)?;
-            let sections = vec![OutputSection::shared_team(
-                team.clone(),
-                shelf.clone(),
-                filter_commands(&commands, Some(&keyword_vec)),
-            )];
-            print_sections(
-                &sections,
-                &empty_message(true, &shelf),
-                &OutputSummary::default(),
-            );
-            return Ok(());
-        }
+            if all_teams {
+                let sections = load_shared_sections_for_target(
+                    shared_context
+                        .as_ref()
+                        .ok_or(shared_repository_required_message())?,
+                    &SharedReadTarget::AllTeams,
+                    shelf,
+                    Some(keyword_vec),
+                )?;
+                print_sections(
+                    &sections,
+                    &empty_message(true, Some(shelf)),
+                    &OutputSummary::default(),
+                );
+                return Ok(());
+            }
 
-        if all_teams {
-            let sections = load_shared_sections_for_target(
-                shared_context
-                    .as_ref()
-                    .ok_or(shared_repository_required_message())?,
-                &SharedReadTarget::AllTeams,
-                &shelf,
-                Some(&keyword_vec),
+            let data_file = data_file
+                .as_deref()
+                .expect("data file should be resolved for single-shelf search");
+            let local_db = CommandDatabase::load_from_file(data_file)?;
+            let plan = resolve_default_read_plan(&matches, &config, shared_context.as_ref())?;
+            let (sections, hidden_local_duplicates) = load_default_read_sections(
+                &local_db,
+                shared_context.as_ref(),
+                shelf,
+                Some(keyword_vec),
+                &plan,
             )?;
-            print_sections(
-                &sections,
-                &empty_message(true, &shelf),
-                &OutputSummary::default(),
-            );
+            let summary = OutputSummary {
+                hidden_local_duplicates,
+                hidden_due_to_limit: 0,
+                active_limit: None,
+            };
+            print_sections(&sections, &empty_message(true, Some(shelf)), &summary);
             return Ok(());
         }
 
-        let local_db = CommandDatabase::load_from_file(&data_file)?;
-        let plan = resolve_default_read_plan(&matches, &config, shared_context.as_ref())?;
-        let (sections, hidden_local_duplicates) = load_default_read_sections(
-            &local_db,
+        let (sections, hidden_local_duplicates) = load_search_sections_without_active_shelf(
+            &matches,
+            &config,
             shared_context.as_ref(),
-            &shelf,
-            Some(&keyword_vec),
-            &plan,
+            keyword_vec,
         )?;
         let summary = OutputSummary {
             hidden_local_duplicates,
             hidden_due_to_limit: 0,
             active_limit: None,
         };
-        print_sections(&sections, &empty_message(true, &shelf), &summary);
+        print_sections(&sections, &empty_message(true, None), &summary);
     }
 
     Ok(())
@@ -635,6 +673,55 @@ fn load_default_read_sections(
     Ok((sections, hidden_local_duplicates))
 }
 
+fn load_search_sections_without_active_shelf(
+    matches: &clap::ArgMatches,
+    config: &ShellshelfConfig,
+    shared_context: Option<&SharedStorageContext>,
+    keywords: &[String],
+) -> Result<(Vec<OutputSection>, usize)> {
+    if let Some(team) = matches.get_one::<String>("team") {
+        let sections = load_shared_sections_for_team_all_shelves(
+            shared_context.ok_or(shared_repository_required_message())?,
+            team,
+            keywords,
+        )?;
+        return Ok((sections, 0));
+    }
+
+    if matches.get_flag("all-teams") {
+        let sections = load_shared_sections_for_all_shelves(
+            shared_context.ok_or(shared_repository_required_message())?,
+            keywords,
+        )?;
+        return Ok((sections, 0));
+    }
+
+    let plan = resolve_default_read_plan(matches, config, shared_context)?;
+    let mut local_sections = if plan.include_local {
+        load_local_sections_for_all_shelves(keywords)?
+    } else {
+        Vec::new()
+    };
+    let shared_sections = match &plan.shared_target {
+        Some(SharedReadTarget::Team(team)) => load_shared_sections_for_team_all_shelves(
+            shared_context.ok_or(shared_repository_required_message())?,
+            team,
+            keywords,
+        )?,
+        Some(SharedReadTarget::AllTeams) => load_shared_sections_for_all_shelves(
+            shared_context.ok_or(shared_repository_required_message())?,
+            keywords,
+        )?,
+        None => Vec::new(),
+    };
+
+    let hidden_local_duplicates =
+        hide_local_duplicates_in_sections(&mut local_sections, shared_sections.as_slice());
+    let mut sections = local_sections;
+    sections.extend(shared_sections);
+    Ok((sections, hidden_local_duplicates))
+}
+
 fn load_shared_sections_for_target(
     shared_context: &SharedStorageContext,
     target: &SharedReadTarget,
@@ -692,15 +779,69 @@ fn load_shared_sections(
     Ok(sections)
 }
 
+fn load_local_sections_for_all_shelves(keywords: &[String]) -> Result<Vec<OutputSection>> {
+    let mut sections = Vec::new();
+
+    for shelf in list_local_shelves()? {
+        let data_file = get_local_data_file_path(&shelf)?;
+        let database = CommandDatabase::load_from_file(&data_file)?;
+        sections.push(OutputSection::local(
+            shelf,
+            filter_commands(&database, Some(keywords)),
+        ));
+    }
+
+    Ok(sections)
+}
+
+fn load_shared_sections_for_team_all_shelves(
+    shared_context: &SharedStorageContext,
+    team: &str,
+    keywords: &[String],
+) -> Result<Vec<OutputSection>> {
+    let mut sections = Vec::new();
+
+    for shelf in list_team_shelves(shared_context, team)? {
+        let commands = load_team_commands(shared_context, team, &shelf, Some(keywords))?;
+        sections.push(OutputSection::shared_team(
+            team.to_string(),
+            shelf,
+            commands
+                .into_iter()
+                .map(OutputEntry::from_owned_command)
+                .collect(),
+        ));
+    }
+
+    Ok(sections)
+}
+
+fn load_shared_sections_for_all_shelves(
+    shared_context: &SharedStorageContext,
+    keywords: &[String],
+) -> Result<Vec<OutputSection>> {
+    let mut sections = Vec::new();
+
+    for (team, shelf) in list_all_team_shelves(shared_context)? {
+        let commands = load_team_commands(shared_context, &team, &shelf, Some(keywords))?;
+        sections.push(OutputSection::shared_team(
+            team,
+            shelf,
+            commands
+                .into_iter()
+                .map(OutputEntry::from_owned_command)
+                .collect(),
+        ));
+    }
+
+    Ok(sections)
+}
+
 fn hide_local_duplicates(
     local_commands: &mut Vec<OutputEntry>,
     shared_sections: &[OutputSection],
 ) -> usize {
-    let shared_commands: HashSet<&str> = shared_sections
-        .iter()
-        .filter(|section| section.is_shared())
-        .flat_map(|section| section.entries.iter().map(|entry| entry.command.as_str()))
-        .collect();
+    let shared_commands = shared_commands(shared_sections);
 
     if shared_commands.is_empty() {
         return 0;
@@ -709,6 +850,40 @@ fn hide_local_duplicates(
     let original_len = local_commands.len();
     local_commands.retain(|command| !shared_commands.contains(command.command.as_str()));
     original_len.saturating_sub(local_commands.len())
+}
+
+fn hide_local_duplicates_in_sections(
+    local_sections: &mut [OutputSection],
+    shared_sections: &[OutputSection],
+) -> usize {
+    let shared_commands = shared_commands(shared_sections);
+
+    if shared_commands.is_empty() {
+        return 0;
+    }
+
+    let mut hidden = 0;
+    for section in local_sections {
+        if !matches!(section.source, OutputSectionSource::Local { .. }) {
+            continue;
+        }
+
+        let original_len = section.entries.len();
+        section
+            .entries
+            .retain(|entry| !shared_commands.contains(entry.command.as_str()));
+        hidden += original_len.saturating_sub(section.entries.len());
+    }
+
+    hidden
+}
+
+fn shared_commands(shared_sections: &[OutputSection]) -> HashSet<&str> {
+    shared_sections
+        .iter()
+        .filter(|section| section.is_shared())
+        .flat_map(|section| section.entries.iter().map(|entry| entry.command.as_str()))
+        .collect()
 }
 
 fn resolve_list_limit(matches: &clap::ArgMatches, config: &ShellshelfConfig) -> Option<usize> {
@@ -755,11 +930,12 @@ fn apply_list_limit(sections: &mut [OutputSection], limit: Option<usize>) -> usi
     hidden
 }
 
-fn empty_message(filtered: bool, shelf: &str) -> String {
-    if filtered {
-        format!("No matching commands in shelf '{shelf}'.")
-    } else {
-        format!("No commands stored in shelf '{shelf}'.")
+fn empty_message(filtered: bool, shelf: Option<&str>) -> String {
+    match (filtered, shelf) {
+        (true, Some(shelf)) => format!("No matching commands in shelf '{shelf}'."),
+        (false, Some(shelf)) => format!("No commands stored in shelf '{shelf}'."),
+        (true, None) => "No matching commands in any shelf.".to_string(),
+        (false, None) => "No commands stored in any shelf.".to_string(),
     }
 }
 

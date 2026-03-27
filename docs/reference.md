@@ -100,7 +100,7 @@ shellshelf --config /path/to/config.json ...
 
 Supported top-level keys:
 
-- `default_shelf`: optional default shelf for normal reads and writes. If omitted, `shellshelf` falls back to the built-in `default` shelf
+- `default_shelf`: optional default shelf for writes and shelf-scoped list/search operations. If omitted, `shellshelf` falls back to the built-in `default` shelf when an active shelf is required
 - `shared_repo`: shared repository configuration
 - `default_list_limit`: optional default limit for `--list`. `0` means unlimited. If omitted, `shellshelf` defaults to `20`
 
@@ -139,7 +139,7 @@ Precedence:
 - `--create-shelf <NAME>`: create a new shelf in the active local or team-scoped target
 - `--list-shelves`: list available shelves in the active local or shared scope
 - `-l`, `--list`: list commands in the active shelf
-- `<keywords...>`: search for commands by keyword in the active shelf
+- `<keywords...>`: search for commands by keyword. With `--shelf`, search stays in that shelf; without it, search spans all shelves in the selected read scope
 
 ### Shared repository options
 
@@ -165,11 +165,19 @@ Shelf names may contain only:
 - underscores
 - hyphens
 
-`shellshelf` always resolves an active shelf for add, list, and search:
+`shellshelf` always resolves an active shelf for add and `--list`, and also for search when `--shelf` is provided:
 
 - CLI `-s` / `--shelf`
 - `default_shelf` from config
 - built-in fallback: `default`
+
+When search keywords are provided without `--shelf`, `shellshelf` searches across all shelves in the selected scope:
+
+- default reads: local shelves, plus configured default shared scope if one applies
+- `--team <TEAM>`: every shelf for that team
+- `--all-teams`: every shelf for every team
+- `--local-only`: local shelves only
+- `--shared-only`: every shelf in the configured default shared scope
 
 `--create-shelf <NAME>` creates the requested shelf file explicitly and exits. If the shelf already exists, `shellshelf` reports that and does not overwrite it.
 
@@ -271,7 +279,7 @@ shellshelf -s curl -a "curl https://api.github.com/users/octocat" --description 
 shellshelf -s curl github octocat
 ```
 
-Default shelf search when `default_shelf` is configured:
+Default all-shelf search without `--shelf`:
 
 ```bash
 shellshelf github octocat

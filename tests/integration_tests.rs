@@ -570,6 +570,69 @@ fn test_search_commands() {
 }
 
 #[test]
+fn test_search_without_shelf_scans_all_local_shelves() {
+    let temp_dir = TempDir::new().unwrap();
+
+    for (shelf, command) in [
+        ("curl", "curl https://api.github.com/users"),
+        ("git", "git status"),
+    ] {
+        let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+        cmd.env("HOME", temp_dir.path())
+            .args(["-s", shelf, "--add", command]);
+        cmd.assert().success();
+    }
+
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", temp_dir.path()).arg("status");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("=== LOCAL / GIT ==="))
+        .stdout(predicate::str::contains("git status"))
+        .stdout(predicate::str::contains("=== LOCAL / CURL ===").not());
+}
+
+#[test]
+fn test_team_search_without_shelf_scans_all_team_shelves() {
+    let temp_dir = TempDir::new().unwrap();
+    let shared_repo = temp_dir.path().join("shared-shellshelf");
+
+    for (shelf, command) in [
+        ("curl", "curl https://api.example.com/platform"),
+        ("git", "git deploy platform"),
+    ] {
+        let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+        cmd.env("HOME", temp_dir.path()).args([
+            "--repo",
+            shared_repo.to_str().unwrap(),
+            "--team",
+            "platform",
+            "-s",
+            shelf,
+            "--add",
+            command,
+        ]);
+        cmd.assert().success();
+    }
+
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", temp_dir.path()).args([
+        "--repo",
+        shared_repo.to_str().unwrap(),
+        "--team",
+        "platform",
+        "deploy",
+    ]);
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("=== SHARED / PLATFORM / GIT ==="))
+        .stdout(predicate::str::contains("git deploy platform"))
+        .stdout(predicate::str::contains("=== SHARED / PLATFORM / CURL ===").not());
+}
+
+#[test]
 fn test_duplicate_prevention() {
     let temp_dir = TempDir::new().unwrap();
     let mut cmd = Command::cargo_bin("shellshelf").unwrap();
