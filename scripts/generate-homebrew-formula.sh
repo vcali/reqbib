@@ -3,7 +3,7 @@
 set -eu
 
 usage() {
-  echo "usage: $0 --repo <owner/repo> --version <version> --revision <revision> --tag <tag> --dist-dir <dir> --output <file>" >&2
+  echo "usage: $0 --repo <owner/repo> --version <version> [--revision <revision>] --tag <tag> --dist-dir <dir> --output <file>" >&2
   exit 1
 }
 
@@ -54,7 +54,6 @@ done
 
 [ -n "$repo" ] || usage
 [ -n "$version" ] || usage
-[ -n "$revision" ] || usage
 [ -n "$tag" ] || usage
 [ -n "$dist_dir" ] || usage
 [ -n "$output" ] || usage
@@ -81,12 +80,17 @@ mac_arm_sha="$(sha_from_file "$mac_arm_archive")"
 
 mkdir -p "$(dirname "$output")"
 
+revision_line=""
+if [ -n "$revision" ]; then
+  revision_line="  revision $revision"
+fi
+
 cat > "$output" <<EOF
 class Shellshelf < Formula
   desc "CLI for storing, searching, and sharing reusable shell commands"
   homepage "https://github.com/$repo"
   version "$version"
-  revision $revision
+${revision_line}
   license "MIT"
 
   if OS.mac?

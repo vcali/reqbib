@@ -145,11 +145,12 @@ GitHub-backed shared usage requires:
 
 ## Releases
 
-Pushes to `main` publish a GitHub Release automatically.
+Create and push a semver tag to publish a GitHub Release automatically.
 
-- Tags use the format `v<crate-version>-build.<run_number>`
+- Tags use the format `v<crate-version>` and must match `Cargo.toml`
 - The Homebrew tap is `vcali/tap`
 - Automatic tap updates require the `HOMEBREW_TAP_TOKEN` repository secret
+- The GitHub release is created before the tap update so published formula URLs are live immediately
 - Release assets currently include:
   - `shellshelf.rb` for tap publication and manual formula use
   - `shellshelf-x86_64-unknown-linux-gnu.tar.gz`
