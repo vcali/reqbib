@@ -111,6 +111,9 @@ jobs:
       - metadata
       - build
     runs-on: ubuntu-latest
+    env:
+      HOMEBREW_TAP_REPO: vcali/homebrew-tap
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
     steps:
       - name: Checkout code
@@ -145,9 +148,6 @@ jobs:
       - name: Publish Homebrew tap
         if: ${{ env.HOMEBREW_TAP_TOKEN != '' }}
         shell: bash
-        env:
-          HOMEBREW_TAP_REPO: vcali/homebrew-tap
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           bash scripts/publish-homebrew-tap.sh \
             --tap-repo "${HOMEBREW_TAP_REPO}" \
