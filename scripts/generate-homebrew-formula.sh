@@ -3,12 +3,13 @@
 set -eu
 
 usage() {
-  echo "usage: $0 --repo <owner/repo> --version <version> --tag <tag> --dist-dir <dir> --output <file>" >&2
+  echo "usage: $0 --repo <owner/repo> --version <version> --revision <revision> --tag <tag> --dist-dir <dir> --output <file>" >&2
   exit 1
 }
 
 repo=""
 version=""
+revision=""
 tag=""
 dist_dir=""
 output=""
@@ -23,6 +24,11 @@ while [ "$#" -gt 0 ]; do
     --version)
       [ "$#" -ge 2 ] || usage
       version="$2"
+      shift 2
+      ;;
+    --revision)
+      [ "$#" -ge 2 ] || usage
+      revision="$2"
       shift 2
       ;;
     --tag)
@@ -48,6 +54,7 @@ done
 
 [ -n "$repo" ] || usage
 [ -n "$version" ] || usage
+[ -n "$revision" ] || usage
 [ -n "$tag" ] || usage
 [ -n "$dist_dir" ] || usage
 [ -n "$output" ] || usage
@@ -79,6 +86,7 @@ class Shellshelf < Formula
   desc "CLI for storing, searching, and sharing reusable shell commands"
   homepage "https://github.com/$repo"
   version "$version"
+  revision $revision
   license "MIT"
 
   if OS.mac?

@@ -17,6 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.metadata.outputs.version }}
+      brew_revision: ${{ steps.metadata.outputs.brew_revision }}
       tag_name: ${{ steps.metadata.outputs.tag_name }}
       release_name: ${{ steps.metadata.outputs.release_name }}
 
@@ -29,10 +30,12 @@ jobs:
         shell: bash
         run: |
           version=$(awk -F' = ' '/^version = / { gsub(/"/, "", $2); print $2; exit }' Cargo.toml)
+          brew_revision="${GITHUB_RUN_NUMBER}"
           tag_name="v${version}-build.${GITHUB_RUN_NUMBER}"
           release_name="shellshelf ${version} build ${GITHUB_RUN_NUMBER}"
 
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "brew_revision=${brew_revision}" >> "${GITHUB_OUTPUT}"
           echo "tag_name=${tag_name}" >> "${GITHUB_OUTPUT}"
           echo "release_name=${release_name}" >> "${GITHUB_OUTPUT}"
 
@@ -107,6 +110,7 @@ jobs:
           bash scripts/generate-homebrew-formula.sh \
             --repo "${{ github.repository }}" \
             --version "${{ needs.metadata.outputs.version }}" \
+            --revision "${{ needs.metadata.outputs.brew_revision }}" \
             --tag "${{ needs.metadata.outputs.tag_name }}" \
             --dist-dir dist \
             --output dist/shellshelf.rb

@@ -10,6 +10,8 @@ Install with Homebrew:
 brew install vcali/tap/shellshelf
 ```
 
+The tap formula tracks the Cargo release version plus a Homebrew revision, so merges that publish a new release without bumping `Cargo.toml` still install and upgrade correctly after `brew update`.
+
 ## Storage Modes
 
 ### Local mode

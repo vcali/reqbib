@@ -42,6 +42,8 @@ fn generates_homebrew_formula_from_release_checksums() {
         .arg("vcali/shellshelf")
         .arg("--version")
         .arg("0.1.0")
+        .arg("--revision")
+        .arg("42")
         .arg("--tag")
         .arg("v0.1.0-build.42")
         .arg("--dist-dir")
@@ -57,6 +59,7 @@ fn generates_homebrew_formula_from_release_checksums() {
 
     assert!(formula.contains("class Shellshelf < Formula"));
     assert!(formula.contains("version \"0.1.0\""));
+    assert!(formula.contains("revision 42"));
     assert!(formula.contains("license \"MIT\""));
     assert!(formula.contains(
         "https://github.com/vcali/shellshelf/releases/download/v0.1.0-build.42/shellshelf-aarch64-apple-darwin.tar.gz"

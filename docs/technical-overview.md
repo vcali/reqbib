@@ -134,6 +134,17 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo doc --no-deps --document-private-items
 ```
 
+## Release Packaging
+
+The release workflow publishes GitHub release assets for Linux, Intel macOS, and Apple Silicon macOS on every merge to `main`.
+
+Homebrew packaging intentionally splits versioning into:
+
+- Cargo/package version from `Cargo.toml`
+- Homebrew `revision`, derived from the GitHub Actions run number
+
+That keeps the CLI’s reported version stable until you intentionally bump Cargo semver, while still making each merged release visible to `brew install` and `brew upgrade`.
+
 ## Known Gaps
 
 The main planned gaps relevant to maintainers are:
