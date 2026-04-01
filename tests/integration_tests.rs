@@ -1095,7 +1095,7 @@ fn test_import_postman_shelf_override() {
 
     let mut cmd = Command::cargo_bin("shellshelf").unwrap();
     cmd.env("HOME", temp_dir.path()).args([
-        "--shelf",
+        "--target-shelf",
         "curl",
         "--import-postman",
         import_file.to_str().unwrap(),
@@ -1154,7 +1154,9 @@ fn test_import_postman_rejects_existing_shelf() {
 
     cmd.assert()
         .failure()
-        .stderr(predicate::str::contains("Shelf 'curl' already exists."));
+        .stderr(predicate::str::contains(
+            "Shelf 'curl' already exists. Use --target-shelf <NAME> to choose a different shelf name for this import.",
+        ));
 
     assert_eq!(
         fs::read_to_string(existing_shelf).unwrap(),
@@ -1336,5 +1338,33 @@ fn test_import_postman_rejects_invalid_flag_combinations() {
 
     cmd.assert().failure().stderr(predicate::str::contains(
         "--list cannot be combined with --import-postman.",
+    ));
+}
+
+#[test]
+fn test_import_postman_rejects_shelf_flag_and_points_to_target_shelf() {
+    let temp_dir = TempDir::new().unwrap();
+    let import_file = temp_dir.path().join("shelf-flag-postman.json");
+    write_text_file(
+        &import_file,
+        r#"{
+  "info": {
+    "name": "curl",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": []
+}"#,
+    );
+
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", temp_dir.path()).args([
+        "--shelf",
+        "curl",
+        "--import-postman",
+        import_file.to_str().unwrap(),
+    ]);
+
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "--shelf cannot be used with --import-postman. Use --target-shelf instead.",
     ));
 }

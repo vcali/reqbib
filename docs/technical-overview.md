@@ -22,7 +22,7 @@ At a high level, execution is:
 
 1. Build and parse CLI arguments.
 2. Load config from `~/.shellshelf/config.json` or `--config`.
-3. Resolve the active shelf from `-s` / `--shelf`, `default_shelf`, the Postman collection name for `--import-postman`, or the built-in `default` fallback.
+3. Resolve the active shelf from `-s` / `--shelf`, `default_shelf`, `--target-shelf` or the Postman collection name for `--import-postman`, or the built-in `default` fallback.
 4. Resolve local or shared storage context from the nested `shared_repo` config or CLI overrides.
 5. For GitHub-backed shared mode, ensure a local checkout exists and refresh it if due.
 6. Execute one of the user operations:

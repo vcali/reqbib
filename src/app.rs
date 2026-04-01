@@ -503,6 +503,11 @@ fn validate_matches(matches: &clap::ArgMatches) -> Result<()> {
         if matches.get_one::<String>("description").is_some() {
             return Err("--description cannot be used with --import-postman.".into());
         }
+        if matches.get_one::<String>("shelf").is_some() {
+            return Err(
+                "--shelf cannot be used with --import-postman. Use --target-shelf instead.".into(),
+            );
+        }
         if matches.get_one::<usize>("limit").is_some() {
             return Err("--limit cannot be used with --import-postman.".into());
         }
@@ -564,12 +569,18 @@ fn import_postman_shelf(
 ) -> Result<()> {
     let outcome = import_postman_collection(
         import_path,
-        matches.get_one::<String>("shelf").map(String::as_str),
+        matches
+            .get_one::<String>("target-shelf")
+            .map(String::as_str),
     )?;
     let data_file = resolve_data_file_path(matches, shared_context, &outcome.shelf_name)?;
 
     if data_file.exists() {
-        return Err(format!("Shelf '{}' already exists.", outcome.shelf_name).into());
+        return Err(format!(
+            "Shelf '{}' already exists. Use --target-shelf <NAME> to choose a different shelf name for this import.",
+            outcome.shelf_name
+        )
+        .into());
     }
 
     outcome.database.save_to_file(&data_file)?;

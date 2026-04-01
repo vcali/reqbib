@@ -73,6 +73,7 @@ Import an exported Postman collection into a new shelf:
 
 ```bash
 shellshelf --import-postman ./postman-api.json
+shellshelf --target-shelf postman-api-v2 --import-postman ./postman-api.json
 shellshelf --repo /path/to/shared-shellshelf --team platform --import-postman ./platform-api.json
 ```
 

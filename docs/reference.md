@@ -138,6 +138,7 @@ Precedence:
 - `-a`, `--add <COMMAND>`: add a command to the active storage target
 - `--description <TEXT>`: optional brief description for `--add`
 - `--import-postman <PATH>`: import an exported Postman collection JSON into a new shelf
+- `--target-shelf <NAME>`: override the new shelf name when importing from Postman
 - `-s`, `--shelf <NAME>`: active shelf
 - `--create-shelf <NAME>`: create a new shelf in the active local or team-scoped target
 - `--list-shelves`: list available shelves in the active local or shared scope
@@ -184,7 +185,7 @@ When search keywords are provided without `--shelf`, `shellshelf` searches acros
 
 `--create-shelf <NAME>` creates the requested shelf file explicitly and exits. If the shelf already exists, `shellshelf` reports that and does not overwrite it.
 
-`--import-postman <PATH>` imports an exported Postman Collection v2.1 JSON file into a new shelf. By default the collection name becomes the shelf name. `--shelf` may be used to override that name.
+`--import-postman <PATH>` imports an exported Postman Collection v2.1 JSON file into a new shelf. By default the collection name becomes the shelf name. `--target-shelf <NAME>` may be used to override that name.
 
 Import behavior:
 
@@ -192,6 +193,7 @@ Import behavior:
 - shared when `--team <TEAM>` is provided
 - `--repo` and `--teams-dir` are allowed for shared imports when paired with `--team`
 - import fails if the target shelf already exists
+- a shelf-name collision error tells the user to retry with `--target-shelf`
 - import errors on invalid JSON, unsupported schema, invalid shelf name, or when every request is unsupported
 - import warns explicitly when some requests are skipped
 
@@ -220,6 +222,7 @@ Import behavior:
 - `--limit` can only be used with `--list`
 - `--shelf` cannot be used with `--list-shelves`
 - `--list-shelves` cannot be combined with `--add`, `--list`, `--create-shelf`, `--description`, `--limit`, or search keywords
+- `--shelf` cannot be used with `--import-postman`; use `--target-shelf` instead
 - `--import-postman` cannot be combined with `--add`, `--list`, `--list-shelves`, `--create-shelf`, `--description`, `--limit`, or search keywords
 
 Team names follow the same character rules as shelves.
@@ -320,7 +323,7 @@ Import a Postman collection:
 
 ```bash
 shellshelf --import-postman ./postman-api.json
-shellshelf --shelf curl --import-postman ./postman-api.json
+shellshelf --target-shelf curl --import-postman ./postman-api.json
 shellshelf --repo /path/to/shared-shellshelf --team platform --import-postman ./platform-api.json
 ```
 
