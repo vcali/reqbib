@@ -171,6 +171,7 @@ Pushes to `main` publish a GitHub Release automatically.
 `shellshelf` stores commands as provided. If a command contains live tokens, cookies, or other credentials, shared repository mode can expose them to teammates or commit history. Secret detection and redaction are still planned, not implemented.
 
 Postman import has the same caveat. Imported headers or raw bodies are stored as-is.
+Supported body modes currently include raw bodies and common multipart form-data requests.
 
 ## Development
 

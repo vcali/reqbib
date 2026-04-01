@@ -119,6 +119,7 @@ The current product direction is intentionally opinionated:
 
 - commands are curated manually rather than imported from shell history
 - imported Postman requests must convert cleanly to explicit curl commands or they are skipped with a warning
+- supported Postman bodies currently include raw payloads and common multipart form-data payloads
 - shelves are the organization boundary; free-form tags are not part of the model
 - shared storage remains team-based to keep ownership simple
 

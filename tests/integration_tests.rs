@@ -1237,13 +1237,17 @@ fn test_import_postman_warns_on_partial_success() {
       }
     },
     {
-      "name": "Upload file",
+      "name": "Repair GIF",
       "request": {
         "method": "POST",
         "body": {
-          "mode": "formdata"
+          "mode": "formdata",
+          "formdata": [
+            { "key": "media_id", "type": "text", "value": "abc123" },
+            { "key": "file", "type": "file", "src": ["/tmp/one.gif", "/tmp/two.gif"] }
+          ]
         },
-        "url": "https://example.com/upload"
+        "url": "https://example.com/repair"
       }
     }
   ]
@@ -1263,8 +1267,63 @@ fn test_import_postman_warns_on_partial_success() {
             "Warning: skipped 1 request during Postman import.",
         ))
         .stderr(predicate::str::contains(
-            "Upload file: uses unsupported body mode 'formdata'",
+            "Repair GIF: contains unsupported form-data parts; skipping whole request: form-data file field 'file' is missing a supported file path",
         ));
+}
+
+#[test]
+fn test_import_postman_supports_formdata_requests() {
+    let temp_dir = TempDir::new().unwrap();
+    let import_file = temp_dir.path().join("media-postman.json");
+    write_text_file(
+        &import_file,
+        r#"{
+  "info": {
+    "name": "media",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Repair GIF",
+      "request": {
+        "method": "POST",
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            { "key": "media_id", "type": "text", "value": "abc123" },
+            { "key": "notes", "type": "text", "value": "" },
+            { "key": "file", "type": "file", "src": "/tmp/test.gif" }
+          ]
+        },
+        "url": "https://example.com/repair"
+      }
+    }
+  ]
+}"#,
+    );
+
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", temp_dir.path())
+        .args(["--import-postman", import_file.to_str().unwrap()]);
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Imported 1 request into shelf 'media'. Skipped 0 requests.",
+        ))
+        .stderr(predicate::str::is_empty());
+
+    let content = fs::read_to_string(
+        temp_dir
+            .path()
+            .join(".shellshelf")
+            .join("shelves")
+            .join("media.json"),
+    )
+    .unwrap();
+    assert!(content.contains("-F 'media_id=abc123'"));
+    assert!(content.contains("-F 'notes='"));
+    assert!(content.contains("-F 'file=@/tmp/test.gif'"));
 }
 
 #[test]

@@ -196,6 +196,8 @@ Import behavior:
 - a shelf-name collision error tells the user to retry with `--target-shelf`
 - import errors on invalid JSON, unsupported schema, invalid shelf name, or when every request is unsupported
 - import warns explicitly when some requests are skipped
+- supported request bodies currently include raw bodies and common `formdata` bodies converted to `curl -F`
+- empty text form-data values are preserved instead of being dropped
 
 `--list-shelves` does not resolve an active shelf. It lists shelf names for the selected scope:
 

@@ -81,6 +81,8 @@ struct PostmanBody {
     mode: Option<String>,
     #[serde(default)]
     raw: Option<String>,
+    #[serde(default)]
+    formdata: Vec<PostmanFormDataField>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -88,6 +90,20 @@ struct PostmanBody {
 enum PostmanUrl {
     Raw(String),
     Detailed { raw: Option<String> },
+}
+
+#[derive(Debug, Deserialize)]
+struct PostmanFormDataField {
+    #[serde(default)]
+    key: Option<String>,
+    #[serde(default)]
+    value: Option<String>,
+    #[serde(rename = "type")]
+    field_type: Option<String>,
+    #[serde(default)]
+    src: Option<Value>,
+    #[serde(default)]
+    disabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -273,15 +289,8 @@ fn convert_request_to_curl(
     }
 
     if let Some(body) = request.body.as_ref() {
-        match body.mode.as_deref() {
-            None => {}
-            Some("raw") => {
-                parts.push("--data-raw".to_string());
-                parts.push(shell_quote(body.raw.as_deref().unwrap_or_default()));
-            }
-            Some(mode) => {
-                return Err(format!("uses unsupported body mode '{mode}'"));
-            }
+        for body_part in convert_body_to_curl_parts(body)? {
+            parts.push(body_part);
         }
     }
 
@@ -313,6 +322,87 @@ fn enabled_headers(headers: &[PostmanHeader]) -> std::result::Result<Vec<String>
     }
 
     Ok(enabled)
+}
+
+fn convert_body_to_curl_parts(body: &PostmanBody) -> std::result::Result<Vec<String>, String> {
+    match body.mode.as_deref() {
+        None => Ok(Vec::new()),
+        Some("raw") => Ok(vec![
+            "--data-raw".to_string(),
+            shell_quote(body.raw.as_deref().unwrap_or_default()),
+        ]),
+        Some("formdata") => convert_formdata_to_curl_parts(&body.formdata),
+        Some(mode) => Err(format!("uses unsupported body mode '{mode}'")),
+    }
+}
+
+fn convert_formdata_to_curl_parts(
+    fields: &[PostmanFormDataField],
+) -> std::result::Result<Vec<String>, String> {
+    let mut parts = Vec::new();
+    let mut unsupported_fields = Vec::new();
+
+    for field in fields {
+        if field.disabled.unwrap_or(false) {
+            continue;
+        }
+
+        match convert_formdata_field(field) {
+            Ok(converted) => {
+                parts.push("-F".to_string());
+                parts.push(shell_quote(&converted));
+            }
+            Err(reason) => unsupported_fields.push(reason),
+        }
+    }
+
+    if !unsupported_fields.is_empty() {
+        return Err(format!(
+            "contains unsupported form-data parts; skipping whole request: {}",
+            unsupported_fields.join("; ")
+        ));
+    }
+
+    Ok(parts)
+}
+
+fn convert_formdata_field(field: &PostmanFormDataField) -> std::result::Result<String, String> {
+    let key = field
+        .key
+        .as_deref()
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .ok_or_else(|| "a form-data field is missing a key".to_string())?;
+
+    match field.field_type.as_deref() {
+        Some("text") | None => Ok(format!(
+            "{key}={}",
+            field.value.as_deref().unwrap_or_default()
+        )),
+        Some("file") => {
+            let src = extract_formdata_file_src(field.src.as_ref()).ok_or_else(|| {
+                format!("form-data file field '{key}' is missing a supported file path")
+            })?;
+            Ok(format!("{key}=@{src}"))
+        }
+        Some(field_type) => Err(format!(
+            "form-data field '{key}' uses unsupported type '{field_type}'"
+        )),
+    }
+}
+
+fn extract_formdata_file_src(src: Option<&Value>) -> Option<String> {
+    match src? {
+        Value::String(path) => {
+            let trimmed = path.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        _ => None,
+    }
 }
 
 fn extract_url(url: Option<&PostmanUrl>) -> Option<String> {
@@ -499,7 +589,7 @@ mod tests {
       "request": {
         "method": "POST",
         "body": {
-          "mode": "formdata"
+          "mode": "urlencoded"
         },
         "url": "https://example.com/upload"
       }
@@ -514,7 +604,157 @@ mod tests {
             outcome.warnings,
             vec![PostmanImportWarning {
                 request_name: "Upload file".to_string(),
-                reason: "uses unsupported body mode 'formdata'".to_string(),
+                reason: "uses unsupported body mode 'urlencoded'".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn test_imports_formdata_text_fields_and_keeps_empty_values() {
+        let outcome = import_fixture(
+            r#"{
+  "info": {
+    "name": "media",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Repair GIF",
+      "request": {
+        "method": "POST",
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            { "key": "media_id", "type": "text", "value": "abc123" },
+            { "key": "notes", "type": "text", "value": "" },
+            { "key": "empty_default", "type": "text" }
+          ]
+        },
+        "url": "https://example.com/repair"
+      }
+    }
+  ]
+}"#,
+            None,
+        );
+
+        assert!(outcome.warnings.is_empty());
+        assert_eq!(
+            outcome.database.commands[0].command,
+            "curl -X 'POST' -F 'media_id=abc123' -F 'notes=' -F 'empty_default=' 'https://example.com/repair'"
+        );
+    }
+
+    #[test]
+    fn test_imports_formdata_file_fields() {
+        let outcome = import_fixture(
+            r#"{
+  "info": {
+    "name": "media",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Upload GIF",
+      "request": {
+        "method": "POST",
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            { "key": "file", "type": "file", "src": "/tmp/test.gif" },
+            { "key": "tag", "type": "text", "value": "repair" }
+          ]
+        },
+        "url": "https://example.com/upload"
+      }
+    }
+  ]
+}"#,
+            None,
+        );
+
+        assert!(outcome.warnings.is_empty());
+        assert_eq!(
+            outcome.database.commands[0].command,
+            "curl -X 'POST' -F 'file=@/tmp/test.gif' -F 'tag=repair' 'https://example.com/upload'"
+        );
+    }
+
+    #[test]
+    fn test_disabled_formdata_fields_are_ignored() {
+        let outcome = import_fixture(
+            r#"{
+  "info": {
+    "name": "media",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Upload GIF",
+      "request": {
+        "method": "POST",
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            { "key": "active", "type": "text", "value": "yes" },
+            { "key": "disabled_field", "type": "text", "value": "no", "disabled": true }
+          ]
+        },
+        "url": "https://example.com/upload"
+      }
+    }
+  ]
+}"#,
+            None,
+        );
+
+        assert_eq!(
+            outcome.database.commands[0].command,
+            "curl -X 'POST' -F 'active=yes' 'https://example.com/upload'"
+        );
+    }
+
+    #[test]
+    fn test_mixed_supported_and_unsupported_formdata_skips_whole_request_with_reason() {
+        let outcome = import_fixture(
+            r#"{
+  "info": {
+    "name": "media",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Supported",
+      "request": {
+        "method": "GET",
+        "url": "https://example.com/supported"
+      }
+    },
+    {
+      "name": "Repair GIF",
+      "request": {
+        "method": "POST",
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            { "key": "media_id", "type": "text", "value": "abc123" },
+            { "key": "file", "type": "file", "src": ["/tmp/one.gif", "/tmp/two.gif"] }
+          ]
+        },
+        "url": "https://example.com/repair"
+      }
+    }
+  ]
+}"#,
+            None,
+        );
+
+        assert_eq!(outcome.database.commands.len(), 1);
+        assert_eq!(
+            outcome.warnings,
+            vec![PostmanImportWarning {
+                request_name: "Repair GIF".to_string(),
+                reason: "contains unsupported form-data parts; skipping whole request: form-data file field 'file' is missing a supported file path".to_string(),
             }]
         );
     }
