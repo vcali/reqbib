@@ -12,6 +12,7 @@ The name is meant to evoke a shelf of reusable shell commands without borrowing 
 - Use `-s` / `--shelf` to keep reads and writes scoped and tidy
 - Fall back to a built-in `default` shelf when neither CLI nor config selects one
 - Create shelves explicitly with `--create-shelf <name>`
+- Import exported Postman collections with `--import-postman <file>`
 - List available shelves with `--list-shelves`
 - Search by extracted keywords instead of exact text only
 - Use a shared team repository layout with optional GitHub-backed checkouts
@@ -66,6 +67,14 @@ Create a shelf explicitly:
 ```bash
 shellshelf --create-shelf git
 shellshelf --repo /path/to/shared-shellshelf --team platform --create-shelf aws
+```
+
+Import an exported Postman collection into a new shelf:
+
+```bash
+shellshelf --import-postman ./postman-api.json
+shellshelf --target-shelf postman-api-v2 --import-postman ./postman-api.json
+shellshelf --repo /path/to/shared-shellshelf --team platform --import-postman ./platform-api.json
 ```
 
 ## Team Usage
@@ -161,6 +170,9 @@ Create and push a semver tag to publish a GitHub Release automatically.
 ## Sensitive Data
 
 `shellshelf` stores commands as provided. If a command contains live tokens, cookies, or other credentials, shared repository mode can expose them to teammates or commit history. Secret detection and redaction are still planned, not implemented.
+
+Postman import has the same caveat. Imported headers or raw bodies are stored as-is.
+Supported body modes currently include raw bodies and common multipart form-data requests.
 
 ## Development
 

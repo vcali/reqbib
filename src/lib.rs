@@ -6,5 +6,6 @@ mod config;
 mod database;
 mod github;
 mod keywords;
+mod postman_import;
 
 pub use app::run;

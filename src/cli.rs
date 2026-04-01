@@ -18,6 +18,18 @@ pub(crate) fn build_cli() -> Command {
                 .help("Optional brief description for --add"),
         )
         .arg(
+            Arg::new("import-postman")
+                .long("import-postman")
+                .value_name("PATH")
+                .help("Import an exported Postman collection JSON into a new shelf"),
+        )
+        .arg(
+            Arg::new("target-shelf")
+                .long("target-shelf")
+                .value_name("NAME")
+                .help("Target shelf name to create when importing from Postman"),
+        )
+        .arg(
             Arg::new("shelf")
                 .short('s')
                 .long("shelf")

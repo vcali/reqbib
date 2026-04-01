@@ -137,6 +137,8 @@ Precedence:
 
 - `-a`, `--add <COMMAND>`: add a command to the active storage target
 - `--description <TEXT>`: optional brief description for `--add`
+- `--import-postman <PATH>`: import an exported Postman collection JSON into a new shelf
+- `--target-shelf <NAME>`: override the new shelf name when importing from Postman
 - `-s`, `--shelf <NAME>`: active shelf
 - `--create-shelf <NAME>`: create a new shelf in the active local or team-scoped target
 - `--list-shelves`: list available shelves in the active local or shared scope
@@ -183,6 +185,20 @@ When search keywords are provided without `--shelf`, `shellshelf` searches acros
 
 `--create-shelf <NAME>` creates the requested shelf file explicitly and exits. If the shelf already exists, `shellshelf` reports that and does not overwrite it.
 
+`--import-postman <PATH>` imports an exported Postman Collection v2.1 JSON file into a new shelf. By default the collection name becomes the shelf name. `--target-shelf <NAME>` may be used to override that name.
+
+Import behavior:
+
+- local by default
+- shared when `--team <TEAM>` is provided
+- `--repo` and `--teams-dir` are allowed for shared imports when paired with `--team`
+- import fails if the target shelf already exists
+- a shelf-name collision error tells the user to retry with `--target-shelf`
+- import errors on invalid JSON, unsupported schema, invalid shelf name, or when every request is unsupported
+- import warns explicitly when some requests are skipped
+- supported request bodies currently include raw bodies and common `formdata` bodies converted to `curl -F`
+- empty text form-data values are preserved instead of being dropped
+
 `--list-shelves` does not resolve an active shelf. It lists shelf names for the selected scope:
 
 - no shared flags: local shelves, plus configured default shared scope if one applies
@@ -197,7 +213,9 @@ When search keywords are provided without `--shelf`, `shellshelf` searches acros
 - `--local-only` and `--shared-only` cannot be used together
 - `--all-teams` is read-only
 - `--all-teams` cannot be used with `--add`
+- `--all-teams` cannot be used with `--import-postman`
 - `--local-only` and `--shared-only` are read-only controls and cannot be used with `--add`
+- `--local-only` and `--shared-only` are read-only controls and cannot be used with `--import-postman`
 - `--local-only` and `--shared-only` cannot be used with `--team` or `--all-teams`
 - `--shared-only` without `--team` or `--all-teams` requires `shared_repo.default_team` or `shared_repo.default_all_teams`
 - `--repo` and `--teams-dir` may be used for default read commands without `--team`
@@ -206,6 +224,8 @@ When search keywords are provided without `--shelf`, `shellshelf` searches acros
 - `--limit` can only be used with `--list`
 - `--shelf` cannot be used with `--list-shelves`
 - `--list-shelves` cannot be combined with `--add`, `--list`, `--create-shelf`, `--description`, `--limit`, or search keywords
+- `--shelf` cannot be used with `--import-postman`; use `--target-shelf` instead
+- `--import-postman` cannot be combined with `--add`, `--list`, `--list-shelves`, `--create-shelf`, `--description`, `--limit`, or search keywords
 
 Team names follow the same character rules as shelves.
 
@@ -299,6 +319,14 @@ Create a shelf explicitly:
 ```bash
 shellshelf --create-shelf git
 shellshelf --repo /path/to/shared-shellshelf --team platform --create-shelf aws
+```
+
+Import a Postman collection:
+
+```bash
+shellshelf --import-postman ./postman-api.json
+shellshelf --target-shelf curl --import-postman ./postman-api.json
+shellshelf --repo /path/to/shared-shellshelf --team platform --import-postman ./platform-api.json
 ```
 
 List available shelves:

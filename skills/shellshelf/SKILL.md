@@ -10,6 +10,7 @@ description: Search, reuse, and record commands in shellshelf instead of re-deri
 - Search `shellshelf` before inventing a command that might already exist.
 - Prefer 1 to 3 concrete search terms: service name, endpoint, team, HTTP method, tool name.
 - Use `-s <shelf>` for command lookups, adds, and lists.
+- Use `--target-shelf <name>` when importing a Postman collection into a new shelf with a name override.
 - Use `--list-shelves` when you need to discover available shelves first.
 - If you create a reusable command, offer to store it with `shellshelf -a ... --description ...`.
 
@@ -66,6 +67,14 @@ shellshelf --repo /path/to/shared-shellshelf --team platform -s curl -a \
   --description "Platform health check"
 ```
 
+7. Import an exported Postman collection when a shelf should be seeded from an API client export:
+
+```bash
+shellshelf --import-postman ./postman-api.json
+shellshelf --target-shelf postman-api-v2 --import-postman ./postman-api.json
+shellshelf --repo /path/to/shared-shellshelf --team platform --import-postman ./platform-api.json
+```
+
 ## Scope Rules
 
 - Use plain `shellshelf ...` for personal or configured default reads.
@@ -81,6 +90,7 @@ shellshelf --repo /path/to/shared-shellshelf --team platform -s curl -a \
 - Use `shellshelf` before hardcoding a command in a script when repo or team context may matter.
 - Skip `shellshelf` for obvious one-off commands with no reuse value.
 - Search before adding, and avoid storing near-duplicates unless the intent is materially different.
+- If a Postman collection name collides with an existing shelf, retry the import with `--target-shelf <name>`.
 - Do not add commands that contain live secrets. Replace tokens, cookies, passwords, and API keys with placeholders such as `$TOKEN`.
 - Prefer adding a short description whenever the command alone will not explain intent.
 
@@ -89,6 +99,7 @@ shellshelf --repo /path/to/shared-shellshelf --team platform -s curl -a \
 - `shellshelf` stores any shell command string; it is no longer curl-only.
 - Shelves are explicit and file-backed, so commands should have one primary home such as `curl`, `git`, `aws`, `docker`, or `kubectl`.
 - There is no shell-history import. Commands are curated intentionally to avoid noise.
+- Exported Postman Collection v2.1 JSON imports are supported for creating new shelves.
 - Shared storage is team-based: `<repo>/teams/<team>/shelves/<shelf>.json`.
 
 ## Examples

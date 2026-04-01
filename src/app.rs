@@ -6,8 +6,10 @@ use crate::config::{
     DefaultSharedReadTarget, SharedStorageContext, ShellshelfConfig,
 };
 use crate::database::{CommandDatabase, StoredCommand};
+use crate::postman_import::{import_postman_collection, PostmanImportOutcome};
 use crate::Result;
 use std::collections::HashSet;
+use std::path::Path;
 
 const DEFAULT_LIST_LIMIT: usize = 20;
 const DEFAULT_SHARED_SELECTION_REQUIRED_MESSAGE: &str =
@@ -131,6 +133,7 @@ pub fn run() -> Result<()> {
     let config = resolve_config(&matches)?;
     validate_matches(&matches)?;
     let add_command = matches.get_one::<String>("add");
+    let import_postman_path = matches.get_one::<String>("import-postman");
     let list_commands = matches.get_flag("list");
     let search_keywords: Option<Vec<String>> = matches
         .get_many::<String>("keywords")
@@ -140,6 +143,7 @@ pub fn run() -> Result<()> {
     let shared_context = resolve_shared_storage_context(&matches, &config)?;
     let list_shelves = matches.get_flag("list-shelves");
     let needs_resolved_shelf = !list_shelves
+        && import_postman_path.is_none()
         && (matches.get_one::<String>("create-shelf").is_some()
             || add_command.is_some()
             || list_commands
@@ -175,6 +179,10 @@ pub fn run() -> Result<()> {
                 .as_deref()
                 .expect("shelf should be resolved for shelf creation"),
         );
+    }
+
+    if let Some(import_path) = import_postman_path {
+        return import_postman_shelf(&matches, shared_context.as_ref(), Path::new(import_path));
     }
 
     if let Some(command) = add_command {
@@ -357,6 +365,7 @@ fn validate_matches(matches: &clap::ArgMatches) -> Result<()> {
     let all_teams = matches.get_flag("all-teams");
     let local_only = matches.get_flag("local-only");
     let shared_only = matches.get_flag("shared-only");
+    let import_postman = matches.get_one::<String>("import-postman");
 
     if local_only && shared_only {
         return Err("--local-only cannot be used together with --shared-only.".into());
@@ -384,9 +393,10 @@ fn validate_matches(matches: &clap::ArgMatches) -> Result<()> {
         if matches.get_one::<String>("add").is_some()
             || matches.get_flag("list")
             || matches.get_one::<String>("create-shelf").is_some()
+            || import_postman.is_some()
         {
             return Err(
-                "--list-shelves cannot be combined with --add, --list, or --create-shelf.".into(),
+                "--list-shelves cannot be combined with --add, --list, --create-shelf, or --import-postman.".into(),
             );
         }
         if matches.get_one::<String>("description").is_some() {
@@ -416,8 +426,13 @@ fn validate_matches(matches: &clap::ArgMatches) -> Result<()> {
                 "--local-only and --shared-only cannot be used with --create-shelf.".into(),
             );
         }
-        if matches.get_one::<String>("add").is_some() || matches.get_flag("list") {
-            return Err("--create-shelf cannot be combined with --add or --list.".into());
+        if matches.get_one::<String>("add").is_some()
+            || matches.get_flag("list")
+            || import_postman.is_some()
+        {
+            return Err(
+                "--create-shelf cannot be combined with --add, --list, or --import-postman.".into(),
+            );
         }
         if matches
             .get_many::<String>("keywords")
@@ -468,6 +483,51 @@ fn validate_matches(matches: &clap::ArgMatches) -> Result<()> {
                 "--teams-dir requires --team when using shared repository write mode.".into(),
             );
         }
+        if import_postman.is_some() {
+            return Err("--add cannot be combined with --import-postman.".into());
+        }
+    }
+
+    if import_postman.is_some() {
+        if all_teams {
+            return Err("--all-teams cannot be used with --import-postman.".into());
+        }
+        if local_only || shared_only {
+            return Err(
+                "--local-only and --shared-only cannot be used with --import-postman.".into(),
+            );
+        }
+        if matches.get_flag("list") {
+            return Err("--list cannot be combined with --import-postman.".into());
+        }
+        if matches.get_one::<String>("description").is_some() {
+            return Err("--description cannot be used with --import-postman.".into());
+        }
+        if matches.get_one::<String>("shelf").is_some() {
+            return Err(
+                "--shelf cannot be used with --import-postman. Use --target-shelf instead.".into(),
+            );
+        }
+        if matches.get_one::<usize>("limit").is_some() {
+            return Err("--limit cannot be used with --import-postman.".into());
+        }
+        if matches
+            .get_many::<String>("keywords")
+            .map(|values| values.len() > 0)
+            .unwrap_or(false)
+        {
+            return Err("--import-postman cannot be combined with search keywords.".into());
+        }
+        if matches.get_one::<String>("repo").is_some()
+            && matches.get_one::<String>("team").is_none()
+        {
+            return Err("--repo requires --team when importing into shared storage.".into());
+        }
+        if matches.get_one::<String>("teams-dir").is_some()
+            && matches.get_one::<String>("team").is_none()
+        {
+            return Err("--teams-dir requires --team when importing into shared storage.".into());
+        }
     }
     Ok(())
 }
@@ -500,6 +560,69 @@ fn create_shelf(
     }
 
     Ok(())
+}
+
+fn import_postman_shelf(
+    matches: &clap::ArgMatches,
+    shared_context: Option<&SharedStorageContext>,
+    import_path: &Path,
+) -> Result<()> {
+    let outcome = import_postman_collection(
+        import_path,
+        matches
+            .get_one::<String>("target-shelf")
+            .map(String::as_str),
+    )?;
+    let data_file = resolve_data_file_path(matches, shared_context, &outcome.shelf_name)?;
+
+    if data_file.exists() {
+        return Err(format!(
+            "Shelf '{}' already exists. Use --target-shelf <NAME> to choose a different shelf name for this import.",
+            outcome.shelf_name
+        )
+        .into());
+    }
+
+    outcome.database.save_to_file(&data_file)?;
+    print_postman_import_summary(matches, &outcome);
+    Ok(())
+}
+
+fn print_postman_import_summary(matches: &clap::ArgMatches, outcome: &PostmanImportOutcome) {
+    let imported_count = outcome.database.commands.len();
+    let skipped_count = outcome.warnings.len();
+    let imported_label = if imported_count == 1 {
+        "request"
+    } else {
+        "requests"
+    };
+    let skipped_label = if skipped_count == 1 {
+        "request"
+    } else {
+        "requests"
+    };
+
+    if let Some(team) = matches.get_one::<String>("team") {
+        println!(
+            "Imported {imported_count} {imported_label} into shelf '{}' for team '{}'. Skipped {skipped_count} {skipped_label}.",
+            outcome.shelf_name, team
+        );
+    } else {
+        println!(
+            "Imported {imported_count} {imported_label} into shelf '{}'. Skipped {skipped_count} {skipped_label}.",
+            outcome.shelf_name
+        );
+    }
+
+    if !outcome.warnings.is_empty() {
+        eprintln!(
+            "Warning: skipped {} {} during Postman import.",
+            skipped_count, skipped_label
+        );
+        for warning in &outcome.warnings {
+            eprintln!("- {}: {}", warning.request_name, warning.reason);
+        }
+    }
 }
 
 fn list_shelves_for_scope(

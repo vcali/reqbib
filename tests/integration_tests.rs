@@ -266,6 +266,13 @@ fn write_command_database(path: &Path, commands: &[(&str, Option<&str>)]) {
     .unwrap();
 }
 
+fn write_text_file(path: &Path, contents: &str) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    fs::write(path, contents).unwrap();
+}
+
 #[test]
 fn test_help_output() {
     let mut cmd = Command::cargo_bin("shellshelf").unwrap();
@@ -278,7 +285,7 @@ fn test_help_output() {
         .stdout(predicate::str::contains("--shelf"))
         .stdout(predicate::str::contains("--list-shelves"))
         .stdout(predicate::str::contains("--list"))
-        .stdout(predicate::str::contains("--import").not());
+        .stdout(predicate::str::contains("--import-postman"));
 }
 
 #[test]
@@ -972,4 +979,451 @@ fn test_github_mode_updates_existing_checkout_when_due() {
     assert!(git_args.contains("-C"));
     assert!(git_args.contains("pull"));
     assert!(git_args.contains("--ff-only"));
+}
+
+#[test]
+fn test_import_postman_creates_local_shelf() {
+    let temp_dir = TempDir::new().unwrap();
+    let import_file = temp_dir.path().join("postman.json");
+    write_text_file(
+        &import_file,
+        r#"{
+  "info": {
+    "name": "postman-api",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "List workspaces",
+      "request": {
+        "method": "GET",
+        "url": "https://api.getpostman.com/workspaces"
+      }
+    }
+  ]
+}"#,
+    );
+
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", temp_dir.path())
+        .args(["--import-postman", import_file.to_str().unwrap()]);
+
+    cmd.assert().success().stdout(predicate::str::contains(
+        "Imported 1 request into shelf 'postman-api'. Skipped 0 requests.",
+    ));
+
+    let data_file = temp_dir
+        .path()
+        .join(".shellshelf")
+        .join("shelves")
+        .join("postman-api.json");
+    assert!(data_file.exists());
+
+    let content = fs::read_to_string(data_file).unwrap();
+    assert!(content.contains("https://api.getpostman.com/workspaces"));
+    assert!(content.contains("List workspaces"));
+}
+
+#[test]
+fn test_import_postman_creates_team_shelf() {
+    let temp_dir = TempDir::new().unwrap();
+    let shared_repo = temp_dir.path().join("shared-shellshelf");
+    let import_file = temp_dir.path().join("team-postman.json");
+    write_text_file(
+        &import_file,
+        r#"{
+  "info": {
+    "name": "platform-api",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "url": "https://api.example.com/platform/health"
+      }
+    }
+  ]
+}"#,
+    );
+
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", temp_dir.path()).args([
+        "--repo",
+        shared_repo.to_str().unwrap(),
+        "--team",
+        "platform",
+        "--import-postman",
+        import_file.to_str().unwrap(),
+    ]);
+
+    cmd.assert().success().stdout(predicate::str::contains(
+        "Imported 1 request into shelf 'platform-api' for team 'platform'. Skipped 0 requests.",
+    ));
+
+    assert!(shared_repo
+        .join("teams")
+        .join("platform")
+        .join("shelves")
+        .join("platform-api.json")
+        .exists());
+}
+
+#[test]
+fn test_import_postman_shelf_override() {
+    let temp_dir = TempDir::new().unwrap();
+    let import_file = temp_dir.path().join("override-postman.json");
+    write_text_file(
+        &import_file,
+        r#"{
+  "info": {
+    "name": "ignored-name",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Ping",
+      "request": {
+        "method": "GET",
+        "url": "https://example.com/ping"
+      }
+    }
+  ]
+}"#,
+    );
+
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", temp_dir.path()).args([
+        "--target-shelf",
+        "curl",
+        "--import-postman",
+        import_file.to_str().unwrap(),
+    ]);
+
+    cmd.assert().success().stdout(predicate::str::contains(
+        "Imported 1 request into shelf 'curl'. Skipped 0 requests.",
+    ));
+
+    assert!(temp_dir
+        .path()
+        .join(".shellshelf")
+        .join("shelves")
+        .join("curl.json")
+        .exists());
+}
+
+#[test]
+fn test_import_postman_rejects_existing_shelf() {
+    let temp_dir = TempDir::new().unwrap();
+    let existing_shelf = temp_dir
+        .path()
+        .join(".shellshelf")
+        .join("shelves")
+        .join("curl.json");
+    write_command_database(
+        &existing_shelf,
+        &[("curl https://existing.example.com", None)],
+    );
+
+    let import_file = temp_dir.path().join("existing-postman.json");
+    write_text_file(
+        &import_file,
+        r#"{
+  "info": {
+    "name": "curl",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "New request",
+      "request": {
+        "method": "GET",
+        "url": "https://example.com/new"
+      }
+    }
+  ]
+}"#,
+    );
+
+    let original_content = fs::read_to_string(&existing_shelf).unwrap();
+
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", temp_dir.path())
+        .args(["--import-postman", import_file.to_str().unwrap()]);
+
+    cmd.assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Shelf 'curl' already exists. Use --target-shelf <NAME> to choose a different shelf name for this import.",
+        ));
+
+    assert_eq!(
+        fs::read_to_string(existing_shelf).unwrap(),
+        original_content
+    );
+}
+
+#[test]
+fn test_import_postman_rejects_invalid_json() {
+    let temp_dir = TempDir::new().unwrap();
+    let import_file = temp_dir.path().join("invalid-postman.json");
+    write_text_file(&import_file, "{invalid");
+
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", temp_dir.path())
+        .args(["--import-postman", import_file.to_str().unwrap()]);
+
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "Failed to parse Postman collection JSON",
+    ));
+
+    assert!(!temp_dir
+        .path()
+        .join(".shellshelf")
+        .join("shelves")
+        .join("invalid-postman.json")
+        .exists());
+}
+
+#[test]
+fn test_import_postman_rejects_unsupported_schema() {
+    let temp_dir = TempDir::new().unwrap();
+    let import_file = temp_dir.path().join("unsupported-schema.json");
+    write_text_file(
+        &import_file,
+        r#"{
+  "info": {
+    "name": "curl",
+    "schema": "https://schema.getpostman.com/json/collection/v2.0.0/collection.json"
+  },
+  "item": []
+}"#,
+    );
+
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", temp_dir.path())
+        .args(["--import-postman", import_file.to_str().unwrap()]);
+
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "Unsupported Postman collection schema",
+    ));
+
+    assert!(!temp_dir
+        .path()
+        .join(".shellshelf")
+        .join("shelves")
+        .join("curl.json")
+        .exists());
+}
+
+#[test]
+fn test_import_postman_warns_on_partial_success() {
+    let temp_dir = TempDir::new().unwrap();
+    let import_file = temp_dir.path().join("partial-postman.json");
+    write_text_file(
+        &import_file,
+        r#"{
+  "info": {
+    "name": "mixed-api",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Supported",
+      "request": {
+        "method": "GET",
+        "url": "https://example.com/supported"
+      }
+    },
+    {
+      "name": "Repair GIF",
+      "request": {
+        "method": "POST",
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            { "key": "media_id", "type": "text", "value": "abc123" },
+            { "key": "file", "type": "file", "src": ["/tmp/one.gif", "/tmp/two.gif"] }
+          ]
+        },
+        "url": "https://example.com/repair"
+      }
+    }
+  ]
+}"#,
+    );
+
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", temp_dir.path())
+        .args(["--import-postman", import_file.to_str().unwrap()]);
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Imported 1 request into shelf 'mixed-api'. Skipped 1 request.",
+        ))
+        .stderr(predicate::str::contains(
+            "Warning: skipped 1 request during Postman import.",
+        ))
+        .stderr(predicate::str::contains(
+            "Repair GIF: contains unsupported form-data parts; skipping whole request: form-data file field 'file' is missing a supported file path",
+        ));
+}
+
+#[test]
+fn test_import_postman_supports_formdata_requests() {
+    let temp_dir = TempDir::new().unwrap();
+    let import_file = temp_dir.path().join("media-postman.json");
+    write_text_file(
+        &import_file,
+        r#"{
+  "info": {
+    "name": "media",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Repair GIF",
+      "request": {
+        "method": "POST",
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            { "key": "media_id", "type": "text", "value": "abc123" },
+            { "key": "notes", "type": "text", "value": "" },
+            { "key": "file", "type": "file", "src": "/tmp/test.gif" }
+          ]
+        },
+        "url": "https://example.com/repair"
+      }
+    }
+  ]
+}"#,
+    );
+
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", temp_dir.path())
+        .args(["--import-postman", import_file.to_str().unwrap()]);
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Imported 1 request into shelf 'media'. Skipped 0 requests.",
+        ))
+        .stderr(predicate::str::is_empty());
+
+    let content = fs::read_to_string(
+        temp_dir
+            .path()
+            .join(".shellshelf")
+            .join("shelves")
+            .join("media.json"),
+    )
+    .unwrap();
+    assert!(content.contains("-F 'media_id=abc123'"));
+    assert!(content.contains("-F 'notes='"));
+    assert!(content.contains("-F 'file=@/tmp/test.gif'"));
+}
+
+#[test]
+fn test_import_postman_fails_when_every_request_is_unsupported() {
+    let temp_dir = TempDir::new().unwrap();
+    let import_file = temp_dir.path().join("unsupported-postman.json");
+    write_text_file(
+        &import_file,
+        r#"{
+  "info": {
+    "name": "secure-api",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Secured request",
+      "request": {
+        "method": "GET",
+        "auth": {
+          "type": "bearer"
+        },
+        "url": "https://example.com/secure"
+      }
+    }
+  ]
+}"#,
+    );
+
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", temp_dir.path())
+        .args(["--import-postman", import_file.to_str().unwrap()]);
+
+    cmd.assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Postman import failed: no supported requests were found.",
+        ))
+        .stderr(predicate::str::contains(
+            "Secured request: uses auth or auth inheritance, which is not supported yet",
+        ));
+
+    assert!(!temp_dir
+        .path()
+        .join(".shellshelf")
+        .join("shelves")
+        .join("secure-api.json")
+        .exists());
+}
+
+#[test]
+fn test_import_postman_rejects_invalid_flag_combinations() {
+    let temp_dir = TempDir::new().unwrap();
+    let import_file = temp_dir.path().join("flags-postman.json");
+    write_text_file(
+        &import_file,
+        r#"{
+  "info": {
+    "name": "curl",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": []
+}"#,
+    );
+
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", temp_dir.path()).args([
+        "--import-postman",
+        import_file.to_str().unwrap(),
+        "--list",
+    ]);
+
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "--list cannot be combined with --import-postman.",
+    ));
+}
+
+#[test]
+fn test_import_postman_rejects_shelf_flag_and_points_to_target_shelf() {
+    let temp_dir = TempDir::new().unwrap();
+    let import_file = temp_dir.path().join("shelf-flag-postman.json");
+    write_text_file(
+        &import_file,
+        r#"{
+  "info": {
+    "name": "curl",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": []
+}"#,
+    );
+
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", temp_dir.path()).args([
+        "--shelf",
+        "curl",
+        "--import-postman",
+        import_file.to_str().unwrap(),
+    ]);
+
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "--shelf cannot be used with --import-postman. Use --target-shelf instead.",
+    ));
 }

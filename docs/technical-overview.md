@@ -14,6 +14,7 @@ The application is split into focused modules:
 - [`src/database.rs`](../src/database.rs): stored command model and JSON persistence
 - [`src/github.rs`](../src/github.rs): managed GitHub checkout bootstrap and refresh logic
 - [`src/keywords.rs`](../src/keywords.rs): keyword extraction and regex reuse
+- [`src/postman_import.rs`](../src/postman_import.rs): exported Postman collection parsing and curl conversion
 
 ## Runtime Flow
 
@@ -21,11 +22,12 @@ At a high level, execution is:
 
 1. Build and parse CLI arguments.
 2. Load config from `~/.shellshelf/config.json` or `--config`.
-3. Resolve the active shelf from `-s` / `--shelf`, `default_shelf`, or the built-in `default` fallback.
+3. Resolve the active shelf from `-s` / `--shelf`, `default_shelf`, `--target-shelf` or the Postman collection name for `--import-postman`, or the built-in `default` fallback.
 4. Resolve local or shared storage context from the nested `shared_repo` config or CLI overrides.
 5. For GitHub-backed shared mode, ensure a local checkout exists and refresh it if due.
 6. Execute one of the user operations:
    - add
+   - import Postman collection
    - create shelf
    - list shelves
    - list
@@ -99,6 +101,7 @@ Current behavior:
 
 - the active shelf is CLI-selected, config-backed, or falls back to the built-in `default`
 - `--create-shelf` initializes a shelf file explicitly rather than waiting for the first `--add`
+- `--import-postman` creates a new shelf from an exported Postman Collection v2.1 JSON file
 - `--list-shelves` skips active-shelf resolution and instead enumerates shelf files in the selected scope
 - if `shared_repo.default_team` is configured, non-team list/search defaults to local plus that team
 - if `shared_repo.default_all_teams` is `true`, non-team list/search defaults to local plus all teams
@@ -115,6 +118,8 @@ Current behavior:
 The current product direction is intentionally opinionated:
 
 - commands are curated manually rather than imported from shell history
+- imported Postman requests must convert cleanly to explicit curl commands or they are skipped with a warning
+- supported Postman bodies currently include raw payloads and common multipart form-data payloads
 - shelves are the organization boundary; free-form tags are not part of the model
 - shared storage remains team-based to keep ownership simple
 
@@ -151,5 +156,6 @@ The main planned gaps relevant to maintainers are:
 
 - secret detection and redaction for stored commands
 - deletion workflow and command identity model
-- Postman and Insomnia importers
+- Insomnia importer
+- deeper Postman support such as API-backed import, auth inheritance, and script-aware conversion
 - deeper GitHub sync beyond checkout bootstrap and refresh
