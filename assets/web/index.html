@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Shellshelf Web</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body data-theme="__WEB_THEME__">
+    <main class="app-shell">
+      <aside class="sidebar">
+        <div class="sidebar-brand">
+          <h1 class="brand-name">shellshelf</h1>
+          <div class="brand-rule" aria-hidden="true"></div>
+        </div>
+        <div id="sidebarContent" class="sidebar-content"></div>
+      </aside>
+
+      <section class="workspace">
+        <header class="workspace-toolbar">
+          <div class="toolbar-context">
+            <span class="toolbar-pill">Shelf</span>
+            <h2 id="selectedShelfLabel">Choose a shelf</h2>
+            <p id="selectedShelfMeta" class="subtle">No shelf selected.</p>
+          </div>
+          <div class="workspace-actions">
+            <button id="runButton" class="primary-button" type="button">Run</button>
+            <button id="saveButton" class="secondary-button" type="button">Save</button>
+          </div>
+        </header>
+
+        <section class="request-panel panel">
+          <div class="request-panel-header">
+            <p class="section-label">Editor</p>
+            <p id="editorStatus" class="status-line subtle"></p>
+          </div>
+
+          <div class="field-group compact-field">
+            <label class="field-label" for="descriptionEditor">Description</label>
+            <input
+              id="descriptionEditor"
+              type="text"
+              maxlength="160"
+              placeholder="Short title"
+            />
+          </div>
+
+          <div class="field-group compact-field">
+            <label class="field-label" for="commandEditor">Command</label>
+            <div
+              id="commandEditorShell"
+              class="command-editor-shell empty"
+              data-placeholder="curl https://example.com or any saved shell command">
+              <div id="commandEditorHighlight" class="command-editor-highlight" aria-hidden="true"></div>
+              <textarea
+                id="commandEditor"
+                spellcheck="false"
+              ></textarea>
+            </div>
+          </div>
+
+          <p id="runHint" class="subtle hint-line"></p>
+        </section>
+
+        <section class="response-panel panel">
+          <div class="response-summary">
+            <div class="response-heading compact">
+              <h2 id="responseTitle">Run Output</h2>
+              <p id="responseMeta" class="subtle">Awaiting request.</p>
+            </div>
+            <div class="run-metadata" aria-label="Run metadata">
+              <div class="meta-item">
+                <span class="meta-label">Method</span>
+                <strong id="requestMethod">-</strong>
+              </div>
+              <div class="meta-item meta-url">
+                <span class="meta-label">URL</span>
+                <strong id="requestUrl">-</strong>
+              </div>
+              <div class="meta-item">
+                <span class="meta-label">HTTP</span>
+                <strong id="statusCode">-</strong>
+              </div>
+              <div class="meta-item">
+                <span class="meta-label">Type</span>
+                <strong id="contentType">-</strong>
+              </div>
+              <div class="meta-item">
+                <span class="meta-label">Exit</span>
+                <strong id="exitCode">-</strong>
+              </div>
+            </div>
+          </div>
+
+          <div class="response-tabs" role="tablist" aria-label="Run output tabs">
+            <button
+              class="response-tab active"
+              id="responseTabButton"
+              type="button"
+              role="tab"
+              aria-selected="true"
+              aria-controls="responseTabPanel"
+              data-tab="response">
+              Response
+            </button>
+            <button
+              class="response-tab"
+              id="headersTabButton"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="headersTabPanel"
+              data-tab="headers">
+              Headers
+            </button>
+            <button
+              class="response-tab"
+              id="stderrTabButton"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="stderrTabPanel"
+              data-tab="stderr">
+              Stderr
+            </button>
+          </div>
+
+          <div class="response-panels">
+            <section
+              id="responseTabPanel"
+              class="tab-panel active"
+              role="tabpanel"
+              aria-labelledby="responseTabButton">
+              <div id="responsePreview" class="response-preview empty-state">
+                No response yet.
+              </div>
+            </section>
+
+            <section
+              id="headersTabPanel"
+              class="tab-panel"
+              role="tabpanel"
+              aria-labelledby="headersTabButton"
+              hidden>
+              <div class="headers-grid">
+                <div class="response-block">
+                  <h3>Request Headers</h3>
+                  <div id="requestHeadersOutput" class="headers-list empty-state">
+                    No explicit request headers in command.
+                  </div>
+                </div>
+
+                <div class="response-block">
+                  <h3>Response Headers</h3>
+                  <div id="responseHeadersOutput" class="headers-list empty-state">
+                    No response headers captured yet.
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section
+              id="stderrTabPanel"
+              class="tab-panel"
+              role="tabpanel"
+              aria-labelledby="stderrTabButton"
+              hidden>
+              <div class="response-block stderr-block">
+                <h3>Stderr</h3>
+                <pre id="stderrOutput">-</pre>
+              </div>
+            </section>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <div id="modalBackdrop" class="modal-backdrop hidden" hidden>
+      <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="createShelfTitle">
+        <div class="modal-header">
+          <div>
+            <p class="section-label">New Shelf</p>
+            <h2 id="createShelfTitle">Create shelf</h2>
+            <p id="createShelfScopeLabel" class="subtle">Select where this shelf should live.</p>
+          </div>
+          <button id="closeModalButton" class="secondary-button modal-close" type="button">Close</button>
+        </div>
+
+        <div class="field-group">
+          <label class="field-label" for="createShelfInput">Shelf name</label>
+          <input
+            id="createShelfInput"
+            type="text"
+            maxlength="80"
+            placeholder="media"
+            autocomplete="off"
+          />
+        </div>
+
+        <div class="modal-actions">
+          <button id="confirmCreateShelfButton" class="primary-button" type="button">Create</button>
+          <button id="cancelCreateShelfButton" class="secondary-button" type="button">Cancel</button>
+        </div>
+
+        <p id="modalStatus" class="status-line subtle"></p>
+      </section>
+    </div>
+
+    <script src="/assets/app.js"></script>
+  </body>
+</html>

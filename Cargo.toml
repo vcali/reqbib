@@ -13,8 +13,12 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 dirs = "5.0"
 regex = "1.0"
+axum = { version = "0.8.4", features = ["json"] }
+tokio = { version = "1.44", features = ["macros", "rt-multi-thread", "process", "net", "sync", "time"] }
+shell-words = "1.1"
+tempfile = "3.0"
 
 [dev-dependencies]
-tempfile = "3.0"
 assert_cmd = "2.0"
 predicates = "3.0"
+tower = { version = "0.5", features = ["util"] }

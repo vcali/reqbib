@@ -104,7 +104,13 @@ Supported top-level keys:
 
 - `default_shelf`: optional default shelf for writes and shelf-scoped list/search operations. If omitted, `shellshelf` falls back to the built-in `default` shelf when an active shelf is required
 - `shared_repo`: shared repository configuration
+- `web`: optional web-interface configuration
 - `default_list_limit`: optional default limit for `--list`. `0` means unlimited. If omitted, `shellshelf` defaults to `20`
+
+Supported keys inside `web`:
+
+- `port`: optional localhost port for `--web`. Defaults to `4812`
+- `theme`: optional web theme. Supported values are `solarized-dark`, `solarized-light`, `giphy`, and `dracula`. Defaults to `dracula`
 
 Supported keys inside `shared_repo`:
 
@@ -135,6 +141,8 @@ Precedence:
 
 ### Core operations
 
+- `--web`: run the localhost web interface
+- `--web-port <PORT>`: port for the localhost web interface. Overrides config and otherwise defaults to `4812`
 - `-a`, `--add <COMMAND>`: add a command to the active storage target
 - `--description <TEXT>`: optional brief description for `--add`
 - `--import-postman <PATH>`: import an exported Postman collection JSON into a new shelf
@@ -158,6 +166,32 @@ Precedence:
 ### Configuration option
 
 - `--config <PATH>`: use a non-default `shellshelf` config file
+
+## Web Interface
+
+`shellshelf --web` runs a localhost-only web interface for interactive HTTP work.
+
+Current behavior:
+
+- binds to `127.0.0.1`
+- uses `--web-port <PORT>` when provided, otherwise `web.port`, otherwise `4812`
+- applies `web.theme` from config when present, with `dracula` as the default
+- reads local shelves plus any shared repository configured through `--repo`, `--teams-dir`, or `shared_repo` config
+- renders local shelves and shared team shelves in an expandable tree explorer
+- shows all stored commands, but only runs commands that validate as supported curl commands
+- loads selected commands into an editable workbench with editable description and command fields
+- can create shelves in the visible local or team-scoped shared area
+- can save new commands or update the selected command in the current shelf
+- displays parsed request method, URL, and request headers next to response headers after a curl run
+- previews text responses inline
+- previews image and video responses inline when the response content type is previewable
+- keeps response bodies ephemeral in memory for the running process
+
+Current curl execution constraints in the web interface:
+
+- only commands whose executable is `curl` are runnable
+- commands using output/capture flags that conflict with the web runner, such as `--output`, `--dump-header`, `--include`, `--head`, `--config`, `--write-out`, and related short forms, are rejected
+- non-curl commands remain browseable and saveable but are marked non-runnable
 
 ## Shelf Rules
 
@@ -211,6 +245,8 @@ Import behavior:
 
 - `--team` and `--all-teams` cannot be used together
 - `--local-only` and `--shared-only` cannot be used together
+- `--web-port` can only be used with `--web`
+- `--web` cannot be combined with `--add`, `--list`, `--list-shelves`, `--create-shelf`, `--import-postman`, `--description`, `--limit`, `--shelf`, `--team`, `--all-teams`, `--local-only`, `--shared-only`, or search keywords
 - `--all-teams` is read-only
 - `--all-teams` cannot be used with `--add`
 - `--all-teams` cannot be used with `--import-postman`
@@ -258,6 +294,15 @@ Behavior:
 - header names and values
 - other meaningful words in the command
 - description text
+
+## Web Response Rendering
+
+The web interface inspects the captured response content type after a curl run:
+
+- `text/*`, JSON, XML, JavaScript, and other text-like responses render as text
+- `image/*` responses render in an inline image preview
+- `video/*` responses render in an inline video preview
+- other binary responses are captured, but fall back to metadata-only display instead of a forced inline preview
 - shelf names for the shelf currently being evaluated
 
 Search is case-insensitive and supports multiple keywords. Each keyword may match command text, extracted command keywords, description text, or the candidate result's shelf name. Existing AND semantics still apply across the full query.

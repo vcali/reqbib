@@ -15,6 +15,9 @@ The name is meant to evoke a shelf of reusable shell commands without borrowing 
 - Import exported Postman collections with `--import-postman <file>`
 - List available shelves with `--list-shelves`
 - Search by extracted keywords and shelf names instead of exact text only
+- Launch a localhost web interface with `--web` for curl-only execution
+- Create shelves and save edited commands from the web interface
+- Preview text, image, and video responses inline in the web interface
 - Use a shared team repository layout with optional GitHub-backed checkouts
 - No shell-history import by design; commands are intentionally curated to avoid noise
 
@@ -82,6 +85,36 @@ Import an exported Postman collection into a new shelf:
 shellshelf --import-postman ./postman-api.json
 shellshelf --target-shelf postman-api-v2 --import-postman ./postman-api.json
 shellshelf --repo /path/to/shared-shellshelf --team platform --import-postman ./platform-api.json
+```
+
+Run the localhost web interface:
+
+```bash
+shellshelf --web
+shellshelf --web --web-port 4920
+```
+
+The web interface:
+
+- browses local shelves and any configured shared repository shelves
+- uses a Postman-like tree explorer for local shelves and shared team shelves
+- loads stored commands into an editable workbench with a description field
+- can create shelves and save new or edited commands back into the selected shelf
+- runs curl commands only, never arbitrary shell commands
+- shows request headers alongside response headers for executed curl requests
+- previews text, images, animated images, and video responses inline when the response content type supports it
+- leaves non-curl commands browseable and editable, but disabled for execution
+- defaults to a Dracula-inspired theme, with optional `solarized-dark`, `solarized-light`, and `giphy` themes configurable in `config.json`
+
+Web config example:
+
+```json
+{
+  "web": {
+    "port": 4920,
+    "theme": "dracula"
+  }
+}
 ```
 
 ## Team Usage
@@ -181,6 +214,8 @@ Create and push a semver tag to publish a GitHub Release automatically.
 Postman import has the same caveat. Imported headers or raw bodies are stored as-is.
 Supported body modes currently include raw bodies and common multipart form-data requests.
 
+The web interface keeps response bodies in-memory for the active process so it can render previews. It does not persist response payloads back into shelf storage.
+
 ## Development
 
 Build:
@@ -193,4 +228,5 @@ Run locally during development:
 
 ```bash
 cargo run -- -s curl -l
+cargo run -- --web
 ```

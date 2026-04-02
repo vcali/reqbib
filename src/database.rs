@@ -38,6 +38,13 @@ pub(crate) struct CommandDatabase {
     pub(crate) commands: Vec<StoredCommand>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SaveCommandOutcome {
+    Added,
+    Updated,
+    Duplicate,
+}
+
 impl CommandDatabase {
     pub(crate) fn new() -> Self {
         Self {
@@ -74,6 +81,42 @@ impl CommandDatabase {
         } else {
             self.commands.push(StoredCommand::new(command, description));
             true
+        }
+    }
+
+    pub(crate) fn save_command(
+        &mut self,
+        original_command: Option<&str>,
+        command: String,
+        description: Option<String>,
+    ) -> SaveCommandOutcome {
+        if let Some(original_command) = original_command {
+            if let Some(index) = self
+                .commands
+                .iter()
+                .position(|existing| existing.command == original_command)
+            {
+                let collides =
+                    self.commands
+                        .iter()
+                        .enumerate()
+                        .any(|(existing_index, existing)| {
+                            existing_index != index && existing.command == command
+                        });
+
+                if collides {
+                    return SaveCommandOutcome::Duplicate;
+                }
+
+                self.commands[index] = StoredCommand::new(command, description);
+                return SaveCommandOutcome::Updated;
+            }
+        }
+
+        if self.add_command(command, description) {
+            SaveCommandOutcome::Added
+        } else {
+            SaveCommandOutcome::Duplicate
         }
     }
 
@@ -117,7 +160,7 @@ impl CommandDatabase {
 
 #[cfg(test)]
 mod tests {
-    use super::{CommandDatabase, StoredCommand};
+    use super::{CommandDatabase, SaveCommandOutcome, StoredCommand};
     use tempfile::TempDir;
 
     #[test]
@@ -166,6 +209,42 @@ mod tests {
             db.commands[0].description.as_deref(),
             Some("First description")
         );
+    }
+
+    #[test]
+    fn test_command_database_save_command_updates_existing_entry() {
+        let mut db = CommandDatabase::new();
+        db.add_command(
+            "curl https://example.com/old".to_string(),
+            Some("Old".to_string()),
+        );
+
+        let outcome = db.save_command(
+            Some("curl https://example.com/old"),
+            "curl https://example.com/new".to_string(),
+            Some("Updated".to_string()),
+        );
+
+        assert_eq!(outcome, SaveCommandOutcome::Updated);
+        assert_eq!(db.commands.len(), 1);
+        assert_eq!(db.commands[0].command, "curl https://example.com/new");
+        assert_eq!(db.commands[0].description.as_deref(), Some("Updated"));
+    }
+
+    #[test]
+    fn test_command_database_save_command_rejects_collision_when_updating() {
+        let mut db = CommandDatabase::new();
+        db.add_command("curl https://example.com/one".to_string(), None);
+        db.add_command("curl https://example.com/two".to_string(), None);
+
+        let outcome = db.save_command(
+            Some("curl https://example.com/one"),
+            "curl https://example.com/two".to_string(),
+            None,
+        );
+
+        assert_eq!(outcome, SaveCommandOutcome::Duplicate);
+        assert_eq!(db.commands.len(), 2);
     }
 
     #[test]
