@@ -9,12 +9,15 @@ The application is split into focused modules:
 - [`src/main.rs`](../src/main.rs): binary entrypoint
 - [`src/lib.rs`](../src/lib.rs): crate wiring and public `run()` entry
 - [`src/app.rs`](../src/app.rs): CLI dispatch and output flow
+- [`src/browse.rs`](../src/browse.rs): shared browse data loading for local and shared shelves
 - [`src/cli.rs`](../src/cli.rs): `clap` command definition
 - [`src/config.rs`](../src/config.rs): config loading, shelf resolution, shared-storage resolution, path validation
+- [`src/curl_runner.rs`](../src/curl_runner.rs): curl-only command validation, direct process execution, and preview-body storage
 - [`src/database.rs`](../src/database.rs): stored command model and JSON persistence
 - [`src/github.rs`](../src/github.rs): managed GitHub checkout bootstrap and refresh logic
 - [`src/keywords.rs`](../src/keywords.rs): keyword extraction and regex reuse
 - [`src/postman_import.rs`](../src/postman_import.rs): exported Postman collection parsing and curl conversion
+- [`src/web.rs`](../src/web.rs): localhost web server, API routes, and static asset serving
 
 ## Runtime Flow
 
@@ -26,6 +29,7 @@ At a high level, execution is:
 4. Resolve local or shared storage context from the nested `shared_repo` config or CLI overrides.
 5. For GitHub-backed shared mode, ensure a local checkout exists and refresh it if due.
 6. Execute one of the user operations:
+   - web interface
    - add
    - import Postman collection
    - create shelf
@@ -33,6 +37,15 @@ At a high level, execution is:
    - list
    - search
 7. Persist updated JSON if the operation mutates storage.
+
+When `--web` is used, the runtime diverges after config/shared-context resolution:
+
+1. Build a loopback-only Axum router.
+2. Serve static HTML, CSS, and JS assets directly from the Rust binary, injecting the configured theme into the HTML shell.
+3. Expose browse data as JSON using the same local/shared repository rules as the CLI.
+4. Accept shelf-creation and command-save mutations against the same shelf JSON files used by the CLI.
+5. Allow the workbench to save arbitrary commands into shelves while still validating run requests as curl-only.
+6. Spawn `curl` directly, capture request metadata, response headers, plus raw body bytes, and expose previewable media through a short-lived in-memory body store.
 
 ## Storage Model
 
@@ -55,6 +68,8 @@ Each entry stores:
 - the original command string
 - an optional short description
 - the extracted keyword list
+
+The web interface does not change this storage model. It reads and writes the same JSON shelves, while keeping request responses in memory only.
 
 ## Search Indexing
 
@@ -113,6 +128,7 @@ Current behavior:
 - `--list` uses a default result cap unless `default_list_limit` or `--limit` overrides it
 - `--list-shelves` is uncapped and groups names by local/shared source, or by team when `--all-teams` is used
 - output uses plain `=== ... ===` section banners with multiline-safe entry blocks, and descriptions render inline after the bracketed index
+- `--web` uses a fixed localhost default port of `4812`, overridden first by `--web-port` and then by `web.port` config when the CLI flag is absent
 
 ## Deliberate Product Constraints
 
@@ -123,6 +139,10 @@ The current product direction is intentionally opinionated:
 - supported Postman bodies currently include raw payloads and common multipart form-data payloads
 - shelves are the organization boundary; free-form tags are not part of the model
 - shared storage remains team-based to keep ownership simple
+- the web interface is a curl-only runner and does not execute arbitrary shell commands
+- the web interface may persist any stored command shape the CLI can already store
+- non-curl commands remain visible and editable in the web UI but are intentionally non-runnable
+- the web UI uses a zero-build tree explorer and a config-driven theme set: `dracula` by default, plus `solarized-dark`, `solarized-light`, and `giphy`
 
 ## Tests
 
@@ -160,3 +180,4 @@ The main planned gaps relevant to maintainers are:
 - Insomnia importer
 - deeper Postman support such as API-backed import, auth inheritance, and script-aware conversion
 - deeper GitHub sync beyond checkout bootstrap and refresh
+- deletion workflow and richer browser-side command management beyond create/edit-save

@@ -285,7 +285,9 @@ fn test_help_output() {
         .stdout(predicate::str::contains("--shelf"))
         .stdout(predicate::str::contains("--list-shelves"))
         .stdout(predicate::str::contains("--list"))
-        .stdout(predicate::str::contains("--import-postman"));
+        .stdout(predicate::str::contains("--import-postman"))
+        .stdout(predicate::str::contains("--web"))
+        .stdout(predicate::str::contains("--web-port"));
 }
 
 #[test]
@@ -307,6 +309,30 @@ fn test_add_uses_builtin_default_shelf_without_config() {
         .join("shelves")
         .join("default.json")
         .exists());
+}
+
+#[test]
+fn test_web_port_requires_web_mode() {
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+
+    cmd.arg("--web-port").arg("4812");
+
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "--web-port can only be used with --web.",
+    ));
+}
+
+#[test]
+fn test_web_mode_rejects_standard_cli_flags() {
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+
+    cmd.args(["--web", "--list"]);
+
+    cmd.assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "--web cannot be combined with --add, --list, --list-shelves, --create-shelf, or --import-postman.",
+        ));
 }
 
 #[test]

@@ -7,6 +7,7 @@ use crate::config::{
 };
 use crate::database::{CommandDatabase, StoredCommand};
 use crate::postman_import::{import_postman_collection, PostmanImportOutcome};
+use crate::web::run_web_server;
 use crate::Result;
 use std::collections::HashSet;
 use std::path::Path;
@@ -141,6 +142,18 @@ pub fn run() -> Result<()> {
 
     let all_teams = matches.get_flag("all-teams");
     let shared_context = resolve_shared_storage_context(&matches, &config)?;
+
+    if matches.get_flag("web") {
+        return run_web_server(
+            shared_context,
+            matches
+                .get_one::<u16>("web-port")
+                .copied()
+                .or(config.web.port),
+            config.web.theme.clone(),
+        );
+    }
+
     let list_shelves = matches.get_flag("list-shelves");
     let needs_resolved_shelf = !list_shelves
         && import_postman_path.is_none()
@@ -366,6 +379,47 @@ fn validate_matches(matches: &clap::ArgMatches) -> Result<()> {
     let local_only = matches.get_flag("local-only");
     let shared_only = matches.get_flag("shared-only");
     let import_postman = matches.get_one::<String>("import-postman");
+    let web_mode = matches.get_flag("web");
+
+    if matches.get_one::<u16>("web-port").is_some() && !web_mode {
+        return Err("--web-port can only be used with --web.".into());
+    }
+
+    if web_mode {
+        if matches.get_one::<String>("add").is_some()
+            || matches.get_flag("list")
+            || matches.get_flag("list-shelves")
+            || matches.get_one::<String>("create-shelf").is_some()
+            || import_postman.is_some()
+        {
+            return Err(
+                "--web cannot be combined with --add, --list, --list-shelves, --create-shelf, or --import-postman."
+                    .into(),
+            );
+        }
+        if matches.get_one::<String>("description").is_some() {
+            return Err("--description cannot be used with --web.".into());
+        }
+        if matches.get_one::<usize>("limit").is_some() {
+            return Err("--limit cannot be used with --web.".into());
+        }
+        if matches.get_one::<String>("shelf").is_some() {
+            return Err("--shelf cannot be used with --web.".into());
+        }
+        if matches.get_one::<String>("team").is_some() || all_teams || local_only || shared_only {
+            return Err(
+                "--web cannot be combined with --team, --all-teams, --local-only, or --shared-only."
+                    .into(),
+            );
+        }
+        if matches
+            .get_many::<String>("keywords")
+            .map(|values| values.len() > 0)
+            .unwrap_or(false)
+        {
+            return Err("--web cannot be combined with search keywords.".into());
+        }
+    }
 
     if local_only && shared_only {
         return Err("--local-only cannot be used together with --shared-only.".into());

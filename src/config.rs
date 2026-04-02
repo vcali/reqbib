@@ -29,6 +29,34 @@ pub(crate) struct ShellshelfConfig {
     pub(crate) shared_repo: Option<SharedRepoConfig>,
     pub(crate) default_list_limit: Option<usize>,
     pub(crate) default_shelf: Option<String>,
+    pub(crate) web: WebConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum WebTheme {
+    SolarizedDark,
+    SolarizedLight,
+    Giphy,
+    #[default]
+    Dracula,
+}
+
+impl WebTheme {
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            Self::SolarizedDark => "solarized-dark",
+            Self::SolarizedLight => "solarized-light",
+            Self::Giphy => "giphy",
+            Self::Dracula => "dracula",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct WebConfig {
+    pub(crate) port: Option<u16>,
+    pub(crate) theme: WebTheme,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -62,6 +90,15 @@ struct RawShellshelfConfig {
     shared_repo: Option<RawSharedRepoConfig>,
     default_list_limit: Option<usize>,
     default_shelf: Option<String>,
+    #[serde(default)]
+    web: Option<RawWebConfig>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct RawWebConfig {
+    port: Option<u16>,
+    theme: Option<WebTheme>,
 }
 
 #[derive(Deserialize)]
@@ -174,6 +211,22 @@ impl TryFrom<RawShellshelfConfig> for ShellshelfConfig {
             shared_repo,
             default_list_limit: value.default_list_limit,
             default_shelf: value.default_shelf,
+            web: WebConfig::try_from(value.web.unwrap_or_default())?,
+        })
+    }
+}
+
+impl TryFrom<RawWebConfig> for WebConfig {
+    type Error = Box<dyn std::error::Error>;
+
+    fn try_from(value: RawWebConfig) -> Result<Self> {
+        if value.port == Some(0) {
+            return Err("web.port must be greater than 0.".into());
+        }
+
+        Ok(Self {
+            port: value.port,
+            theme: value.theme.unwrap_or_default(),
         })
     }
 }
@@ -445,28 +498,8 @@ pub(crate) fn resolve_shared_storage_context(
 
     let repository_root = if let Some(repository_root) = explicit_repo {
         repository_root
-    } else if let Some(shared_repo) = config.shared_repo.as_ref() {
-        match shared_repo {
-            SharedRepoConfig::Path(path_config) => path_config.path.clone(),
-            SharedRepoConfig::Github(github_config) => {
-                let (checkout_path, was_cloned) =
-                    ensure_github_repo_checkout(&github_config.github_repo)?;
-                if was_cloned {
-                    let _ = write_github_repo_sync_stamp(
-                        &get_default_github_state_root(),
-                        &github_config.github_repo,
-                    );
-                } else if let Err(error) = maybe_update_github_repo_checkout(
-                    &github_config.github_repo,
-                    &checkout_path,
-                    github_config.auto_update_repo,
-                    github_config.auto_update_interval(),
-                ) {
-                    eprintln!("Warning: failed to update shared repository checkout: {error}");
-                }
-                checkout_path
-            }
-        }
+    } else if let Some(repository_root) = resolve_repository_root_from_config(config)? {
+        repository_root
     } else {
         if team.is_some() || all_teams {
             return Err(SHARED_REPOSITORY_REQUIRED_MESSAGE.into());
@@ -486,6 +519,31 @@ pub(crate) fn resolve_shared_storage_context(
         repository_root,
         teams_dir,
     }))
+}
+
+fn resolve_repository_root_from_config(config: &ShellshelfConfig) -> Result<Option<PathBuf>> {
+    match config.shared_repo.as_ref() {
+        Some(SharedRepoConfig::Path(path_config)) => Ok(Some(path_config.path.clone())),
+        Some(SharedRepoConfig::Github(github_config)) => {
+            let (checkout_path, was_cloned) =
+                ensure_github_repo_checkout(&github_config.github_repo)?;
+            if was_cloned {
+                let _ = write_github_repo_sync_stamp(
+                    &get_default_github_state_root(),
+                    &github_config.github_repo,
+                );
+            } else if let Err(error) = maybe_update_github_repo_checkout(
+                &github_config.github_repo,
+                &checkout_path,
+                github_config.auto_update_repo,
+                github_config.auto_update_interval(),
+            ) {
+                eprintln!("Warning: failed to update shared repository checkout: {error}");
+            }
+            Ok(Some(checkout_path))
+        }
+        None => Ok(None),
+    }
 }
 
 pub(crate) fn resolve_data_file_path(
@@ -641,7 +699,8 @@ mod tests {
         get_local_data_file_path, get_team_data_file_path, list_all_team_shelves,
         list_local_shelves, list_team_shelves, resolve_active_shelf, validate_relative_directory,
         validate_shelf_name, DefaultSharedReadTarget, GithubSharedRepoConfig, PathSharedRepoConfig,
-        SharedRepoConfig, SharedStorageContext, ShellshelfConfig, BUILTIN_DEFAULT_SHELF,
+        SharedRepoConfig, SharedStorageContext, ShellshelfConfig, WebConfig, WebTheme,
+        BUILTIN_DEFAULT_SHELF,
     };
     use crate::cli::build_cli;
     use crate::github::DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES;
@@ -852,6 +911,7 @@ mod tests {
                 })),
                 default_list_limit: None,
                 default_shelf: Some("curl".to_string()),
+                web: WebConfig::default(),
             }
         );
     }
@@ -884,8 +944,74 @@ mod tests {
                 })),
                 default_list_limit: None,
                 default_shelf: None,
+                web: WebConfig::default(),
             }
         );
+    }
+
+    #[test]
+    fn test_load_config_with_web_theme_and_port() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = write_config_file(
+            &temp_dir,
+            serde_json::json!({
+                "web": {
+                    "port": 4940,
+                    "theme": "giphy"
+                }
+            }),
+        );
+
+        let config = ShellshelfConfig::load_from_file(&config_path).unwrap();
+
+        assert_eq!(
+            config.web,
+            WebConfig {
+                port: Some(4940),
+                theme: WebTheme::Giphy,
+            }
+        );
+    }
+
+    #[test]
+    fn test_load_config_with_dracula_web_theme() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = write_config_file(
+            &temp_dir,
+            serde_json::json!({
+                "web": {
+                    "theme": "dracula"
+                }
+            }),
+        );
+
+        let config = ShellshelfConfig::load_from_file(&config_path).unwrap();
+
+        assert_eq!(
+            config.web,
+            WebConfig {
+                port: None,
+                theme: WebTheme::Dracula,
+            }
+        );
+    }
+
+    #[test]
+    fn test_load_config_rejects_web_port_zero() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = write_config_file(
+            &temp_dir,
+            serde_json::json!({
+                "web": {
+                    "port": 0
+                }
+            }),
+        );
+
+        let error =
+            ShellshelfConfig::load_from_file(&config_path).expect_err("web.port zero should fail");
+
+        assert_eq!(error.to_string(), "web.port must be greater than 0.");
     }
 
     #[test]

@@ -5,6 +5,19 @@ pub(crate) fn build_cli() -> Command {
         .about("A CLI for storing, searching, and sharing reusable shell commands")
         .version(env!("CARGO_PKG_VERSION"))
         .arg(
+            Arg::new("web")
+                .long("web")
+                .help("Run the localhost web interface")
+                .action(clap::ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("web-port")
+                .long("web-port")
+                .value_name("PORT")
+                .value_parser(clap::value_parser!(u16).range(1..))
+                .help("Port for the localhost web interface (overrides config, default: 4812)"),
+        )
+        .arg(
             Arg::new("add")
                 .short('a')
                 .long("add")
