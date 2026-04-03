@@ -1,6 +1,6 @@
 [package]
 name = "shellshelf"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2021"
 description = "CLI, localhost web interface, and Codex skill for storing reusable shell commands"
 license = "MIT"
