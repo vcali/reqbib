@@ -12,6 +12,19 @@ brew install vcali/tap/shellshelf
 
 The tap formula tracks the Cargo release version plus a Homebrew revision, so merges that publish a new release without bumping `Cargo.toml` still install and upgrade correctly after `brew update`.
 
+On Linux, the project currently publishes a release tarball rather than distro-specific packages:
+
+```bash
+VERSION="v0.2.4" # replace with the release you want
+curl -LO "https://github.com/vcali/shellshelf/releases/download/${VERSION}/shellshelf-x86_64-unknown-linux-gnu.tar.gz"
+curl -LO "https://github.com/vcali/shellshelf/releases/download/${VERSION}/shellshelf-x86_64-unknown-linux-gnu.tar.gz.sha256"
+sha256sum --check shellshelf-x86_64-unknown-linux-gnu.tar.gz.sha256
+tar -xzf shellshelf-x86_64-unknown-linux-gnu.tar.gz
+install -Dm755 shellshelf ~/.local/bin/shellshelf
+```
+
+Make sure `~/.local/bin` is on your `PATH`.
+
 ## Storage Modes
 
 ### Local mode

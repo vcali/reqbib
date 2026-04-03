@@ -12,6 +12,19 @@ Install with Homebrew:
 brew install vcali/tap/shellshelf
 ```
 
+On Linux, install the published release binary tarball:
+
+```bash
+VERSION="v0.2.4" # replace with the release you want
+curl -LO "https://github.com/vcali/shellshelf/releases/download/${VERSION}/shellshelf-x86_64-unknown-linux-gnu.tar.gz"
+curl -LO "https://github.com/vcali/shellshelf/releases/download/${VERSION}/shellshelf-x86_64-unknown-linux-gnu.tar.gz.sha256"
+sha256sum --check shellshelf-x86_64-unknown-linux-gnu.tar.gz.sha256
+tar -xzf shellshelf-x86_64-unknown-linux-gnu.tar.gz
+install -Dm755 shellshelf ~/.local/bin/shellshelf
+```
+
+Make sure `~/.local/bin` is on your `PATH`.
+
 Default config lives at `~/.shellshelf/config.json`.
 
 Connect a shared GitHub-backed repo once:
