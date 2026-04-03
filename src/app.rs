@@ -11,12 +11,17 @@ use crate::github::{
     normalize_github_repo_input, DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES,
 };
 use crate::postman_import::{import_postman_collection, PostmanImportOutcome};
+use crate::shared_repo_publish::{
+    prepare_publish_branch, publish_pull_request, sanitize_branch_component, PreparedPublishBranch,
+    PublishPullRequestPlan,
+};
 use crate::web::run_web_server;
 use crate::Result;
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const DEFAULT_LIST_LIMIT: usize = 20;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum OutputSectionSource {
     Local { shelf: String },
@@ -52,6 +57,13 @@ struct OutputSummary {
     hidden_local_duplicates: usize,
     hidden_due_to_limit: usize,
     active_limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SharedPublishContext {
+    prepared_branch: PreparedPublishBranch,
+    plan: PublishPullRequestPlan,
+    repo_root: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -190,7 +202,15 @@ pub fn run() -> Result<()> {
     }
 
     if matches.get_one::<String>("create-shelf").is_some() {
-        return create_shelf(
+        let publish_context = resolve_shared_publish_context(
+            &matches,
+            shared_context.as_ref(),
+            shelf
+                .as_deref()
+                .expect("shelf should be resolved for shelf creation"),
+            "create shelf",
+        )?;
+        let changed = create_shelf(
             &matches,
             data_file
                 .as_deref()
@@ -198,11 +218,22 @@ pub fn run() -> Result<()> {
             shelf
                 .as_deref()
                 .expect("shelf should be resolved for shelf creation"),
-        );
+        )?;
+        publish_shared_changes(publish_context, changed)?;
+        return Ok(());
     }
 
     if let Some(import_path) = import_postman_path {
-        return import_postman_shelf(&matches, shared_context.as_ref(), Path::new(import_path));
+        let import_outcome = load_postman_import(&matches, Path::new(import_path))?;
+        let publish_context = resolve_shared_publish_context(
+            &matches,
+            shared_context.as_ref(),
+            &import_outcome.shelf_name,
+            "import a Postman collection",
+        )?;
+        let import_result = save_postman_import(&matches, shared_context.as_ref(), import_outcome)?;
+        publish_shared_changes(publish_context, import_result.changed)?;
+        return Ok(());
     }
 
     if let Some(command) = add_command {
@@ -212,6 +243,12 @@ pub fn run() -> Result<()> {
         let data_file = data_file
             .as_deref()
             .expect("data file should be resolved for add operations");
+        let publish_context = resolve_shared_publish_context(
+            &matches,
+            shared_context.as_ref(),
+            shelf,
+            "add a command",
+        )?;
         let description = matches
             .get_one::<String>("description")
             .map(|value| value.trim().to_string())
@@ -229,6 +266,7 @@ pub fn run() -> Result<()> {
         } else {
             println!("Command already exists in shelf '{shelf}'.");
         }
+        publish_shared_changes(publish_context, added)?;
         return Ok(());
     }
 
@@ -430,12 +468,89 @@ fn configure_shared_repo(
     Ok(())
 }
 
+fn resolve_shared_publish_context(
+    matches: &clap::ArgMatches,
+    shared_context: Option<&SharedStorageContext>,
+    shelf: &str,
+    action_description: &str,
+) -> Result<Option<SharedPublishContext>> {
+    if !matches.get_flag("open-pr") {
+        return Ok(None);
+    }
+
+    let team = matches
+        .get_one::<String>("team")
+        .expect("--open-pr validation should require --team");
+    let shared_context = shared_context.ok_or(shared_repository_required_message())?;
+    let repo_root = shared_context.repository_root.clone();
+    let data_file = resolve_data_file_path(matches, Some(shared_context), shelf)?;
+    let default_branch = format!(
+        "shellshelf/{}-{}",
+        sanitize_branch_component(team),
+        sanitize_branch_component(shelf)
+    );
+    let prepared_branch = prepare_publish_branch(
+        &repo_root,
+        matches.get_one::<String>("base-branch").map(String::as_str),
+        matches.get_one::<String>("pr-branch").map(String::as_str),
+        &default_branch,
+    )?;
+
+    let shelf_label = format!("{team}/{shelf}");
+    let commit_message = match action_description {
+        "create shelf" => format!("Add {shelf_label} shelf"),
+        "import a Postman collection" => format!("Import {shelf_label} shelf"),
+        _ => format!("Update {shelf_label} shelf"),
+    };
+    let pr_title = commit_message.clone();
+    let pr_body =
+        format!("## Summary\n- {action_description} in the shared shelf `{shelf_label}`\n");
+
+    Ok(Some(SharedPublishContext {
+        prepared_branch,
+        plan: PublishPullRequestPlan {
+            commit_message,
+            pr_title,
+            pr_body,
+            changed_paths: vec![data_file],
+        },
+        repo_root,
+    }))
+}
+
+fn publish_shared_changes(
+    publish_context: Option<SharedPublishContext>,
+    changed: bool,
+) -> Result<()> {
+    let Some(publish_context) = publish_context else {
+        return Ok(());
+    };
+
+    if !changed {
+        println!("No shared changes were published.");
+        return Ok(());
+    }
+
+    if let Some(pr_url) = publish_pull_request(
+        &publish_context.repo_root,
+        &publish_context.prepared_branch,
+        &publish_context.plan,
+    )? {
+        println!("Opened pull request: {pr_url}");
+    } else {
+        println!("No shared changes were published.");
+    }
+
+    Ok(())
+}
+
 fn validate_matches(matches: &clap::ArgMatches) -> Result<()> {
     let add_repo = matches.get_one::<String>("add-repo");
     let all_teams = matches.get_flag("all-teams");
     let local_only = matches.get_flag("local-only");
     let shared_only = matches.get_flag("shared-only");
     let import_postman = matches.get_one::<String>("import-postman");
+    let open_pr = matches.get_flag("open-pr");
     let web_mode = matches.get_flag("web");
     let has_keywords = matches
         .get_many::<String>("keywords")
@@ -457,6 +572,9 @@ fn validate_matches(matches: &clap::ArgMatches) -> Result<()> {
             || matches.get_one::<String>("repo").is_some()
             || matches.get_one::<String>("teams-dir").is_some()
             || matches.get_one::<String>("team").is_some()
+            || open_pr
+            || matches.get_one::<String>("base-branch").is_some()
+            || matches.get_one::<String>("pr-branch").is_some()
             || all_teams
             || local_only
             || shared_only
@@ -467,6 +585,14 @@ fn validate_matches(matches: &clap::ArgMatches) -> Result<()> {
 
     if matches.get_one::<u16>("web-port").is_some() && !web_mode {
         return Err("--web-port can only be used with --web.".into());
+    }
+
+    if matches.get_one::<String>("base-branch").is_some() && !open_pr {
+        return Err("--base-branch can only be used with --open-pr.".into());
+    }
+
+    if matches.get_one::<String>("pr-branch").is_some() && !open_pr {
+        return Err("--pr-branch can only be used with --open-pr.".into());
     }
 
     if web_mode {
@@ -486,6 +612,14 @@ fn validate_matches(matches: &clap::ArgMatches) -> Result<()> {
         }
         if matches.get_one::<usize>("limit").is_some() {
             return Err("--limit cannot be used with --web.".into());
+        }
+        if open_pr
+            || matches.get_one::<String>("base-branch").is_some()
+            || matches.get_one::<String>("pr-branch").is_some()
+        {
+            return Err(
+                "--open-pr, --base-branch, and --pr-branch cannot be used with --web.".into(),
+            );
         }
         if matches.get_one::<String>("shelf").is_some() {
             return Err("--shelf cannot be used with --web.".into());
@@ -523,6 +657,20 @@ fn validate_matches(matches: &clap::ArgMatches) -> Result<()> {
         return Err("--description can only be used with --add.".into());
     }
 
+    if open_pr
+        && matches.get_one::<String>("add").is_none()
+        && matches.get_one::<String>("create-shelf").is_none()
+        && import_postman.is_none()
+    {
+        return Err(
+            "--open-pr can only be used with --add, --create-shelf, or --import-postman.".into(),
+        );
+    }
+
+    if open_pr && matches.get_one::<String>("team").is_none() {
+        return Err("--open-pr requires --team so the change targets shared storage.".into());
+    }
+
     if matches.get_flag("list-shelves") {
         if matches.get_one::<String>("add").is_some()
             || matches.get_flag("list")
@@ -538,6 +686,9 @@ fn validate_matches(matches: &clap::ArgMatches) -> Result<()> {
         }
         if matches.get_one::<usize>("limit").is_some() {
             return Err("--limit cannot be used with --list-shelves.".into());
+        }
+        if open_pr {
+            return Err("--open-pr cannot be used with --list-shelves.".into());
         }
         if matches.get_one::<String>("shelf").is_some() {
             return Err("--shelf cannot be used with --list-shelves.".into());
@@ -667,10 +818,10 @@ fn create_shelf(
     matches: &clap::ArgMatches,
     data_file: &std::path::Path,
     shelf: &str,
-) -> Result<()> {
+) -> Result<bool> {
     if data_file.exists() {
         println!("Shelf '{shelf}' already exists.");
-        return Ok(());
+        return Ok(false);
     }
 
     CommandDatabase::new().save_to_file(data_file)?;
@@ -681,20 +832,30 @@ fn create_shelf(
         println!("Created shelf '{shelf}'.");
     }
 
-    Ok(())
+    Ok(true)
 }
 
-fn import_postman_shelf(
+struct ImportPostmanResult {
+    changed: bool,
+}
+
+fn load_postman_import(
     matches: &clap::ArgMatches,
-    shared_context: Option<&SharedStorageContext>,
     import_path: &Path,
-) -> Result<()> {
-    let outcome = import_postman_collection(
+) -> Result<PostmanImportOutcome> {
+    import_postman_collection(
         import_path,
         matches
             .get_one::<String>("target-shelf")
             .map(String::as_str),
-    )?;
+    )
+}
+
+fn save_postman_import(
+    matches: &clap::ArgMatches,
+    shared_context: Option<&SharedStorageContext>,
+    outcome: PostmanImportOutcome,
+) -> Result<ImportPostmanResult> {
     let data_file = resolve_data_file_path(matches, shared_context, &outcome.shelf_name)?;
 
     if data_file.exists() {
@@ -707,7 +868,7 @@ fn import_postman_shelf(
 
     outcome.database.save_to_file(&data_file)?;
     print_postman_import_summary(matches, &outcome);
-    Ok(())
+    Ok(ImportPostmanResult { changed: true })
 }
 
 fn print_postman_import_summary(matches: &clap::ArgMatches, outcome: &PostmanImportOutcome) {

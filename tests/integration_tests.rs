@@ -212,6 +212,150 @@ printf '%s\\n' \"$@\" > \"{}\"\n",
     (git_path, log_path)
 }
 
+fn write_publish_mock_git(temp_dir: &Path) -> (PathBuf, PathBuf) {
+    let log_path = temp_dir.join("publish-git.log");
+    let git_path = if cfg!(windows) {
+        temp_dir.join("publish-git.cmd")
+    } else {
+        temp_dir.join("publish-git")
+    };
+
+    let script = if cfg!(windows) {
+        format!(
+            "@echo off\r\n\
+setlocal EnableDelayedExpansion\r\n\
+echo %*>> \"{}\"\r\n\
+if \"%1\"==\"status\" (\r\n\
+  if \"%3\"==\"--\" (\r\n\
+    echo M %4\r\n\
+    exit /b 0\r\n\
+  )\r\n\
+  if not \"%SHELLSHELF_TEST_GIT_STATUS%\"==\"\" <nul set /p =%SHELLSHELF_TEST_GIT_STATUS%\r\n\
+  exit /b 0\r\n\
+)\r\n\
+if \"%1\"==\"symbolic-ref\" (\r\n\
+  echo %SHELLSHELF_TEST_GIT_REMOTE_HEAD%\r\n\
+  exit /b 0\r\n\
+)\r\n\
+if \"%1\"==\"branch\" (\r\n\
+  echo %SHELLSHELF_TEST_GIT_CURRENT_BRANCH%\r\n\
+  exit /b 0\r\n\
+)\r\n\
+if \"%1\"==\"show-ref\" (\r\n\
+  set REF=%4\r\n\
+  if /I \"!REF:~0,11!\"==\"refs/heads/\" (\r\n\
+    set BRANCH=!REF:~11!\r\n\
+    echo ,%SHELLSHELF_TEST_GIT_LOCAL_BRANCHES%, | findstr /C:\",!BRANCH!,\" >nul && exit /b 0\r\n\
+    exit /b 1\r\n\
+  )\r\n\
+  if /I \"!REF:~0,20!\"==\"refs/remotes/origin/\" (\r\n\
+    set BRANCH=!REF:~20!\r\n\
+    echo ,%SHELLSHELF_TEST_GIT_REMOTE_BRANCHES%, | findstr /C:\",!BRANCH!,\" >nul && exit /b 0\r\n\
+    exit /b 1\r\n\
+  )\r\n\
+)\r\n\
+exit /b 0\r\n",
+            log_path.display()
+        )
+    } else {
+        format!(
+            "#!/bin/sh\n\
+printf '%s\\n' \"$*\" >> \"{}\"\n\
+case \"$1\" in\n\
+  status)\n\
+    if [ \"$3\" = \"--\" ]; then\n\
+      printf ' M %s' \"$4\"\n\
+      exit 0\n\
+    fi\n\
+    if [ -n \"$SHELLSHELF_TEST_GIT_STATUS\" ]; then\n\
+      printf '%s' \"$SHELLSHELF_TEST_GIT_STATUS\"\n\
+    fi\n\
+    exit 0\n\
+    ;;\n\
+  symbolic-ref)\n\
+    printf '%s\\n' \"${{SHELLSHELF_TEST_GIT_REMOTE_HEAD:-refs/remotes/origin/main}}\"\n\
+    exit 0\n\
+    ;;\n\
+  branch)\n\
+    printf '%s\\n' \"${{SHELLSHELF_TEST_GIT_CURRENT_BRANCH:-main}}\"\n\
+    exit 0\n\
+    ;;\n\
+  show-ref)\n\
+    ref=\"$4\"\n\
+    case \"$ref\" in\n\
+      refs/heads/*)\n\
+        branch=\"${{ref#refs/heads/}}\"\n\
+        case \",${{SHELLSHELF_TEST_GIT_LOCAL_BRANCHES}},\" in\n\
+          *,\"$branch\",*) exit 0 ;;\n\
+          *) exit 1 ;;\n\
+        esac\n\
+        ;;\n\
+      refs/remotes/origin/*)\n\
+        branch=\"${{ref#refs/remotes/origin/}}\"\n\
+        case \",${{SHELLSHELF_TEST_GIT_REMOTE_BRANCHES:-main}},\" in\n\
+          *,\"$branch\",*) exit 0 ;;\n\
+          *) exit 1 ;;\n\
+        esac\n\
+        ;;\n\
+    esac\n\
+    ;;\n\
+esac\n\
+exit 0\n",
+            log_path.display()
+        )
+    };
+
+    fs::write(&git_path, script).unwrap();
+
+    #[cfg(unix)]
+    {
+        let mut permissions = fs::metadata(&git_path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&git_path, permissions).unwrap();
+    }
+
+    (git_path, log_path)
+}
+
+fn write_publish_mock_gh(temp_dir: &Path) -> (PathBuf, PathBuf) {
+    let log_path = temp_dir.join("publish-gh.log");
+    let gh_path = if cfg!(windows) {
+        temp_dir.join("publish-gh.cmd")
+    } else {
+        temp_dir.join("publish-gh")
+    };
+
+    let script = if cfg!(windows) {
+        format!(
+            "@echo off\r\n\
+setlocal\r\n\
+echo %*>> \"{}\"\r\n\
+if \"%1\"==\"pr\" echo %SHELLSHELF_TEST_GH_PR_URL%\r\n",
+            log_path.display()
+        )
+    } else {
+        format!(
+            "#!/bin/sh\n\
+printf '%s\\n' \"$*\" >> \"{}\"\n\
+if [ \"$1\" = \"pr\" ]; then\n\
+  printf '%s\\n' \"${{SHELLSHELF_TEST_GH_PR_URL:-https://github.com/acme/shared-shellshelf/pull/1}}\"\n\
+fi\n",
+            log_path.display()
+        )
+    };
+
+    fs::write(&gh_path, script).unwrap();
+
+    #[cfg(unix)]
+    {
+        let mut permissions = fs::metadata(&gh_path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&gh_path, permissions).unwrap();
+    }
+
+    (gh_path, log_path)
+}
+
 fn write_command_database(path: &Path, commands: &[(&str, Option<&str>)]) {
     let values: Vec<serde_json::Value> = commands
         .iter()
@@ -901,6 +1045,112 @@ fn test_add_command_to_team_repository() {
 }
 
 #[test]
+fn test_open_pr_publishes_shared_add_on_clean_branch() {
+    let temp_dir = TempDir::new().unwrap();
+    let shared_repo = temp_dir.path().join("shared-shellshelf");
+    let (git_path, git_log_path) = write_publish_mock_git(temp_dir.path());
+    let (gh_path, gh_log_path) = write_publish_mock_gh(temp_dir.path());
+
+    fs::create_dir_all(&shared_repo).unwrap();
+
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", temp_dir.path())
+        .env("SHELLSHELF_GIT_BIN", &git_path)
+        .env("SHELLSHELF_GH_BIN", &gh_path)
+        .env("SHELLSHELF_TEST_GIT_CURRENT_BRANCH", "main")
+        .env("SHELLSHELF_TEST_GIT_REMOTE_BRANCHES", "main,trunk")
+        .env(
+            "SHELLSHELF_TEST_GH_PR_URL",
+            "https://github.com/acme/shared-shellshelf/pull/42",
+        )
+        .args([
+            "--repo",
+            shared_repo.to_str().unwrap(),
+            "--team",
+            "platform",
+            "-s",
+            "curl",
+            "--add",
+            "curl https://api.example.com/platform",
+            "--open-pr",
+            "--base-branch",
+            "trunk",
+            "--pr-branch",
+            "feat/platform-curl",
+        ]);
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Added command to shelf 'curl': curl https://api.example.com/platform",
+        ))
+        .stdout(predicate::str::contains(
+            "Opened pull request: https://github.com/acme/shared-shellshelf/pull/42",
+        ));
+
+    let data_file = shared_repo
+        .join("teams")
+        .join("platform")
+        .join("shelves")
+        .join("curl.json");
+    assert!(data_file.exists());
+
+    let git_log = fs::read_to_string(git_log_path).unwrap();
+    assert!(git_log.contains("status --porcelain"));
+    assert!(git_log.contains("fetch origin trunk"));
+    assert!(git_log.contains("switch -c feat/platform-curl"));
+    assert!(git_log.contains("rebase origin/trunk"));
+    assert!(git_log.contains("add"));
+    assert!(git_log.contains("commit -m Update platform/curl shelf"));
+    assert!(git_log.contains("push --set-upstream origin feat/platform-curl"));
+
+    let gh_log = fs::read_to_string(gh_log_path).unwrap();
+    assert!(gh_log.contains("pr create"));
+    assert!(gh_log.contains("--base trunk"));
+    assert!(gh_log.contains("--head feat/platform-curl"));
+    assert!(gh_log.contains("--title Update platform/curl shelf"));
+}
+
+#[test]
+fn test_open_pr_rejects_dirty_shared_checkout_before_writing() {
+    let temp_dir = TempDir::new().unwrap();
+    let shared_repo = temp_dir.path().join("shared-shellshelf");
+    let (git_path, _) = write_publish_mock_git(temp_dir.path());
+
+    fs::create_dir_all(&shared_repo).unwrap();
+
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", temp_dir.path())
+        .env("SHELLSHELF_GIT_BIN", &git_path)
+        .env(
+            "SHELLSHELF_TEST_GIT_STATUS",
+            " M teams/platform/shelves/curl.json",
+        )
+        .args([
+            "--repo",
+            shared_repo.to_str().unwrap(),
+            "--team",
+            "platform",
+            "-s",
+            "curl",
+            "--add",
+            "curl https://api.example.com/platform",
+            "--open-pr",
+        ]);
+
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "Shared repository checkout has uncommitted changes.",
+    ));
+
+    assert!(!shared_repo
+        .join("teams")
+        .join("platform")
+        .join("shelves")
+        .join("curl.json")
+        .exists());
+}
+
+#[test]
 fn test_team_repository_storage_is_isolated_per_team() {
     let temp_dir = TempDir::new().unwrap();
     let shared_repo = temp_dir.path().join("shared-shellshelf");
@@ -1265,6 +1515,43 @@ fn test_add_repo_rejects_combined_flags() {
 
     cmd.assert().failure().stderr(predicate::str::contains(
         "--add-repo must be used on its own.",
+    ));
+}
+
+#[test]
+fn test_open_pr_requires_team() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+
+    cmd.env("HOME", temp_dir.path()).args([
+        "-s",
+        "curl",
+        "--add",
+        "curl https://example.com",
+        "--open-pr",
+    ]);
+
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "--open-pr requires --team so the change targets shared storage.",
+    ));
+}
+
+#[test]
+fn test_pr_branch_requires_open_pr() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+
+    cmd.env("HOME", temp_dir.path()).args([
+        "-s",
+        "curl",
+        "--add",
+        "curl https://example.com",
+        "--pr-branch",
+        "feat/curl",
+    ]);
+
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "--pr-branch can only be used with --open-pr.",
     ));
 }
 
