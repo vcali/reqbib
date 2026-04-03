@@ -2,7 +2,7 @@
 name = "shellshelf"
 version = "0.2.3"
 edition = "2021"
-description = "CLI for storing, searching, and sharing reusable shell commands"
+description = "CLI, localhost web interface, and Codex skill for storing reusable shell commands"
 license = "MIT"
 repository = "https://github.com/vcali/shellshelf"
 homepage = "https://github.com/vcali/shellshelf"

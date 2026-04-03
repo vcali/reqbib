@@ -1,25 +1,8 @@
 # shellshelf
 
-`shellshelf` is a CLI for storing, searching, and sharing reusable shell commands.
+`shellshelf` is a CLI, localhost web interface, and bundled Codex skill for storing, searching, and sharing reusable shell commands across personal shelves and team repositories, including a web workbench for running stored `curl` commands and inspecting responses.
 
 The name is meant to evoke a shelf of reusable shell commands without borrowing software-library terminology.
-
-## Highlights
-
-- Store any command in an explicit shelf such as `curl`, `git`, `aws`, or `kubectl`
-- Local storage lives under `~/.shellshelf/shelves/<shelf>.json`
-- Shared storage stays team-based under `<repo>/teams/<team>/shelves/<shelf>.json`
-- Use `-s` / `--shelf` to keep reads and writes scoped and tidy
-- Fall back to a built-in `default` shelf when neither CLI nor config selects one
-- Create shelves explicitly with `--create-shelf <name>`
-- Import exported Postman collections with `--import-postman <file>`
-- List available shelves with `--list-shelves`
-- Search by extracted keywords and shelf names instead of exact text only
-- Launch a localhost web interface with `--web` for curl-only execution
-- Create shelves and save edited commands from the web interface
-- Preview text, image, and video responses inline in the web interface
-- Use a shared team repository layout with optional GitHub-backed checkouts
-- No shell-history import by design; commands are intentionally curated to avoid noise
 
 ## Quick Start
 
@@ -28,6 +11,69 @@ Install with Homebrew:
 ```bash
 brew install vcali/tap/shellshelf
 ```
+
+Default config lives at `~/.shellshelf/config.json`.
+
+Search within a shelf or across shelves:
+
+```bash
+> $ shellshelf csv
+=== LOCAL / AWK ===
+
+[1] Print csv files with awk
+awk -F ',' '{print $2}' <filename>
+```
+
+Search shared team shelves:
+
+```bash
+shellshelf --repo /path/to/shared-shellshelf --team platform -s curl webhook
+shellshelf --repo /path/to/shared-shellshelf --all-teams -s curl stripe webhook
+```
+
+Start the localhost web interface:
+
+```bash
+shellshelf --web
+shellshelf --web --web-port 4920
+```
+
+## Highlights
+
+- Search by keywords and shelf names instead of exact text only
+- Keep personal shelves local while browsing shared team shelves from the same tool
+- Launch a localhost web interface with a tree explorer and editable request workbench
+- Run stored `curl` commands in the web UI with inline text, image, and video previews
+- Ship a bundled Codex skill so agents can search shelves before reinventing commands
+- Import exported Postman collections into shelves when you need a starting point
+- Avoid shell-history dumping; commands stay intentionally curated
+
+## Web Interface
+
+The web interface:
+
+- browses local shelves and any configured shared repository shelves
+- uses a Postman-like tree explorer for local shelves and shared team shelves
+- loads stored commands into an editable workbench with a description field
+- can create shelves and save new or edited commands back into the selected shelf
+- runs `curl` commands only, never arbitrary shell commands
+- shows request headers alongside response headers for executed `curl` requests
+- previews text, images, animated images, and video responses inline when the response content type supports it
+- leaves non-`curl` commands browseable and editable, but disabled for execution
+- defaults to a Dracula-inspired theme, with optional `solarized-dark`, `solarized-light`, and `giphy` themes configurable in `config.json`
+
+Web config example:
+
+```json
+{
+  "web": {
+    "port": 4920,
+    "theme": "dracula"
+  }
+}
+```
+
+## More CLI Basics
 
 Add a command locally:
 
@@ -40,20 +86,6 @@ Add a command with a short description:
 ```bash
 shellshelf -s git -a "git log --oneline --graph -20" \
   --description "Compact recent history graph"
-```
-
-Search within a shelf:
-
-```bash
-shellshelf -s curl github octocat
-shellshelf -s aws s3
-shellshelf -s media media upload
-```
-
-Search across shelves:
-
-```bash
-shellshelf media upload
 ```
 
 List a shelf:
@@ -85,36 +117,6 @@ Import an exported Postman collection into a new shelf:
 shellshelf --import-postman ./postman-api.json
 shellshelf --target-shelf postman-api-v2 --import-postman ./postman-api.json
 shellshelf --repo /path/to/shared-shellshelf --team platform --import-postman ./platform-api.json
-```
-
-Run the localhost web interface:
-
-```bash
-shellshelf --web
-shellshelf --web --web-port 4920
-```
-
-The web interface:
-
-- browses local shelves and any configured shared repository shelves
-- uses a Postman-like tree explorer for local shelves and shared team shelves
-- loads stored commands into an editable workbench with a description field
-- can create shelves and save new or edited commands back into the selected shelf
-- runs curl commands only, never arbitrary shell commands
-- shows request headers alongside response headers for executed curl requests
-- previews text, images, animated images, and video responses inline when the response content type supports it
-- leaves non-curl commands browseable and editable, but disabled for execution
-- defaults to a Dracula-inspired theme, with optional `solarized-dark`, `solarized-light`, and `giphy` themes configurable in `config.json`
-
-Web config example:
-
-```json
-{
-  "web": {
-    "port": 4920,
-    "theme": "dracula"
-  }
-}
 ```
 
 ## Team Usage
@@ -164,6 +166,12 @@ curl -X POST https://api.example.com/platform/health \
 ```
 
 ## Config
+
+Default config location:
+
+```text
+~/.shellshelf/config.json
+```
 
 Minimal GitHub-backed config:
 
