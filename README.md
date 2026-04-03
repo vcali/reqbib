@@ -17,9 +17,11 @@ Default config lives at `~/.shellshelf/config.json`.
 Search within a shelf or across shelves:
 
 ```bash
-shellshelf -s curl github octocat
-shellshelf -s media media upload
-shellshelf media upload
+> $ shellshelf csv
+=== LOCAL / AWK ===
+
+[1] Print csv files with awk
+awk -F ',' '{print $2}' <filename>
 ```
 
 Search shared team shelves:
