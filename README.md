@@ -4,14 +4,16 @@
 
 The name is meant to evoke a shelf of reusable shell commands without borrowing software-library terminology.
 
-## Quick Start
+## Installation
 
+### MacOS
 Install with Homebrew:
 
 ```bash
 brew install vcali/tap/shellshelf
 ```
 
+### Linux
 On Linux, install the published release binary tarball:
 
 ```bash
@@ -25,6 +27,9 @@ install -Dm755 shellshelf ~/.local/bin/shellshelf
 
 Make sure `~/.local/bin` is on your `PATH`.
 
+## Quickstart
+
+###
 Default config lives at `~/.shellshelf/config.json`.
 
 Search within a shelf or across shelves:
