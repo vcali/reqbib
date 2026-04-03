@@ -73,6 +73,7 @@ shellshelf --web --web-port 4920
 
 - Search by keywords and shelf names instead of exact text only
 - Keep personal shelves local while browsing shared team shelves from the same tool
+- Open pull requests for shared-shelf writes without leaving the CLI
 - Launch a localhost web interface with a tree explorer and editable request workbench
 - Run stored `curl` commands in the web UI with inline text, image, and video previews
 - Ship a bundled Codex skill so agents can search shelves before reinventing commands
@@ -175,6 +176,19 @@ shellshelf --repo /path/to/shared-shellshelf --team platform -s curl -a \
 shellshelf --repo /path/to/shared-shellshelf --team platform -s curl -l
 ```
 
+Publish a shared write as a pull request:
+
+```bash
+shellshelf --repo /path/to/shared-shellshelf --team platform -s curl -a \
+  "curl https://api.example.com/platform/health" \
+  --open-pr
+
+shellshelf --repo /path/to/shared-shellshelf --team platform --create-shelf aws \
+  --open-pr --base-branch main --pr-branch feat/platform-aws
+```
+
+`--open-pr` is available on shared `--add`, `--create-shelf`, and `--import-postman` writes. It checks that the shared checkout is clean, fetches and rebases onto the base branch, creates or reuses a publish branch, commits the changed shelf file, pushes it, and opens a pull request with `gh`.
+
 Cross-team search within one shelf:
 
 ```bash
@@ -225,6 +239,7 @@ GitHub-backed shared usage requires:
 
 - `gh` installed and authenticated
 - `git` available locally
+- a clean shared checkout before `--open-pr`
 
 You can write the `shared_repo.mode = "github"` config for that automatically with:
 

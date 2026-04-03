@@ -17,6 +17,7 @@ The application is split into focused modules:
 - [`src/github.rs`](../src/github.rs): managed GitHub checkout bootstrap and refresh logic
 - [`src/keywords.rs`](../src/keywords.rs): keyword extraction and regex reuse
 - [`src/postman_import.rs`](../src/postman_import.rs): exported Postman collection parsing and curl conversion
+- [`src/shared_repo_publish.rs`](../src/shared_repo_publish.rs): shared-repo branch preparation, commit/push flow, and PR creation
 - [`src/web.rs`](../src/web.rs): localhost web server, API routes, and static asset serving
 
 ## Runtime Flow
@@ -37,7 +38,9 @@ At a high level, execution is:
    - list shelves
    - list
    - search
-7. Persist updated JSON if the operation mutates storage.
+7. If `--open-pr` is attached to a shared write, prepare a clean publish branch before mutating storage.
+8. Persist updated JSON if the operation mutates storage.
+9. If `--open-pr` was requested and the write changed a shelf file, commit, push, and open a pull request.
 
 When `--web` is used, the runtime diverges after config/shared-context resolution:
 
@@ -90,7 +93,7 @@ This is still a simple in-memory scan over JSON-backed records. It is acceptable
 
 ## GitHub Integration Model
 
-Current GitHub support is intentionally narrow:
+Current GitHub support is intentionally conservative:
 
 - repository selection comes from CLI or `shared_repo` config
 - `--add-repo` can write `shared_repo.mode = "github"` config from a GitHub URL or `owner/repo`
@@ -98,12 +101,14 @@ Current GitHub support is intentionally narrow:
 - refresh uses `git pull --ff-only`
 - refresh state is tracked in `~/.shellshelf/state`
 - refresh cadence is configurable with `shared_repo.auto_update_interval_minutes`
+- shared `--add`, `--create-shelf`, and `--import-postman` can optionally publish via `--open-pr`
+- publish prep checks for a clean checkout, fetches the selected base branch, switches to the requested or generated publish branch, and rebases on the base branch
+- publish completion stages the changed shelf file, commits it, pushes it, and opens a PR with `gh`
 
-`shellshelf` does not yet:
+`shellshelf` still does not:
 
-- commit
-- push
-- resolve merge conflicts
+- resolve merge conflicts for you beyond surfacing the failed rebase
+- manage authentication beyond shelling out to local `git` and `gh`
 - enforce org or team permissions beyond repository layout
 
 ## Read Scope

@@ -9,6 +9,7 @@ mod database;
 mod github;
 mod keywords;
 mod postman_import;
+mod shared_repo_publish;
 mod web;
 
 pub use app::run;

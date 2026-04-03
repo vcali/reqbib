@@ -106,6 +106,24 @@ pub(crate) fn build_cli() -> Command {
                 .help("Team folder inside the shared repository"),
         )
         .arg(
+            Arg::new("open-pr")
+                .long("open-pr")
+                .help("Commit, push, and open a pull request for a shared write operation")
+                .action(clap::ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("base-branch")
+                .long("base-branch")
+                .value_name("BRANCH")
+                .help("Base branch to rebase onto before opening a pull request"),
+        )
+        .arg(
+            Arg::new("pr-branch")
+                .long("pr-branch")
+                .value_name("BRANCH")
+                .help("Publish branch to create or reuse for --open-pr"),
+        )
+        .arg(
             Arg::new("all-teams")
                 .long("all-teams")
                 .help("Search or list across all teams in the shared repository")

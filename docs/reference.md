@@ -182,6 +182,9 @@ Precedence:
 - `--repo <PATH>`: path to a shared repository checkout
 - `--add-repo <GITHUB_REPO>`: configure the shared GitHub repository in config from a GitHub URL or `owner/repo`
 - `--team <TEAM>`: target a single team folder
+- `--open-pr`: commit, push, and open a pull request for a shared write operation
+- `--base-branch <BRANCH>`: base branch to fetch and rebase onto before `--open-pr`
+- `--pr-branch <BRANCH>`: publish branch to create or reuse for `--open-pr`
 - `--teams-dir <PATH>`: relative path to the teams directory within the repo
 - `--all-teams`: list or search across every team in the same shelf
 - `--local-only`: limit default list/search commands to local storage
@@ -246,6 +249,8 @@ When search keywords are provided without `--shelf`, `shellshelf` searches acros
 
 `--create-shelf <NAME>` creates the requested shelf file explicitly and exits. If the shelf already exists, `shellshelf` reports that and does not overwrite it.
 
+When `--open-pr` is added to a shared `--create-shelf`, `shellshelf` prepares a clean publish branch before writing, then commits the new shelf file, pushes it, and opens a pull request after the write succeeds.
+
 `--import-postman <PATH>` imports an exported Postman Collection v2.1 JSON file into a new shelf. By default the collection name becomes the shelf name. `--target-shelf <NAME>` may be used to override that name.
 
 Import behavior:
@@ -259,6 +264,7 @@ Import behavior:
 - import warns explicitly when some requests are skipped
 - supported request bodies currently include raw bodies and common `formdata` bodies converted to `curl -F`
 - empty text form-data values are preserved instead of being dropped
+- `--open-pr` may be combined with shared imports to commit, push, and open a pull request for the imported shelf file
 
 `--list-shelves` does not resolve an active shelf. It lists shelf names for the selected scope:
 
@@ -277,6 +283,9 @@ Import behavior:
 - `--all-teams` is read-only
 - `--all-teams` cannot be used with `--add`
 - `--all-teams` cannot be used with `--import-postman`
+- `--open-pr` can only be used with shared `--add`, `--create-shelf`, or `--import-postman` operations
+- `--open-pr` requires `--team`
+- `--base-branch` and `--pr-branch` require `--open-pr`
 - `--local-only` and `--shared-only` are read-only controls and cannot be used with `--add`
 - `--local-only` and `--shared-only` are read-only controls and cannot be used with `--import-postman`
 - `--local-only` and `--shared-only` cannot be used with `--team` or `--all-teams`
@@ -295,13 +304,14 @@ The teams directory must be a relative path and cannot contain `.` or `..` compo
 
 ## GitHub Integration
 
-Current GitHub integration is checkout-based. `shellshelf` does not create commits, push changes, or manage authentication on its own.
+Current GitHub integration is checkout-based for reads and PR-based for optional shared writes. `shellshelf` still relies on local `git` and `gh` authentication rather than managing credentials on its own.
 
 Requirements:
 
 - `gh` installed
 - `gh` authenticated for the target repository
 - `git` installed
+- a clean shared checkout before `--open-pr`
 
 Behavior:
 
@@ -309,6 +319,12 @@ Behavior:
 - managed checkouts are refreshed with `git pull --ff-only`
 - refresh runs at most once per `auto_update_interval_minutes`
 - set `auto_update_repo` to `false` to disable refresh entirely
+- `--open-pr` is available on shared `--add`, `--create-shelf`, and `--import-postman`
+- before the write, `shellshelf` checks that the checkout is clean, fetches `origin/<base-branch>`, switches to the requested or generated publish branch, and rebases onto the chosen base branch
+- if `--base-branch` is omitted, `shellshelf` prefers `origin/HEAD` and falls back to `main` or `master`
+- if `--pr-branch` is omitted, `shellshelf` reuses the current non-base branch when possible; otherwise it creates a branch named like `shellshelf/<team>-<shelf>`
+- after the write, `shellshelf` stages the changed shelf JSON, commits it, pushes it with `git push --set-upstream origin <branch>`, and opens a pull request with `gh pr create`
+- if the write is a no-op, `shellshelf` skips commit, push, and PR creation
 
 ## Search Behavior
 
