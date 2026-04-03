@@ -88,6 +88,12 @@ pub(crate) fn build_cli() -> Command {
                 .help("Path to a shared GitHub repository checkout"),
         )
         .arg(
+            Arg::new("add-repo")
+                .long("add-repo")
+                .value_name("GITHUB_REPO")
+                .help("Configure the shared GitHub repository from a GitHub URL or owner/repo"),
+        )
+        .arg(
             Arg::new("teams-dir")
                 .long("teams-dir")
                 .value_name("PATH")

@@ -48,13 +48,24 @@ Shared mode is activated when:
 
 - `--team <team>` is used
 - `--all-teams` is used
-- or a default shared target is configured and you use default read commands
+- or a shared repository is configured and you use default read commands
 
 Repository resolution order:
 
 1. `--repo <path>`
 2. `shared_repo.mode = "path"` from config
 3. `shared_repo.mode = "github"` from config, which bootstraps a managed local checkout with `gh repo clone`
+
+Quick setup for GitHub-backed shared mode:
+
+```bash
+shellshelf --add-repo https://github.com/acme/shared-shellshelf.git
+shellshelf --add-repo acme/shared-shellshelf
+```
+
+This updates `~/.shellshelf/config.json` (or `--config <PATH>`) to use `shared_repo.mode = "github"` for that repository while preserving unrelated config such as `default_shelf`, `web`, and existing shared-team defaults.
+
+Once a shared repo is configured, default read commands include local shelves plus all teams unless `shared_repo.default_team` narrows that default or you explicitly scope the read with CLI flags.
 
 ## Configuration
 
@@ -119,7 +130,7 @@ Supported keys inside `shared_repo`:
 - `github_repo`: required for `mode = "github"`, in `<owner>/<repo>` format
 - `teams_dir`: relative path inside the repository that contains team folders. Defaults to `teams`
 - `default_team`: optional default shared team for non-team read commands
-- `default_all_teams`: optional shared read default for non-team read commands. Defaults to `false`
+- `default_all_teams`: optional explicit shared read default for non-team read commands. This matches the built-in default when a shared repo is configured
 - `auto_update_repo`: GitHub mode only. Defaults to `true`
 - `auto_update_interval_minutes`: GitHub mode only. Defaults to `15` and must be greater than `0`
 
@@ -156,6 +167,7 @@ Precedence:
 ### Shared repository options
 
 - `--repo <PATH>`: path to a shared repository checkout
+- `--add-repo <GITHUB_REPO>`: configure the shared GitHub repository in config from a GitHub URL or `owner/repo`
 - `--team <TEAM>`: target a single team folder
 - `--teams-dir <PATH>`: relative path to the teams directory within the repo
 - `--all-teams`: list or search across every team in the same shelf
@@ -166,6 +178,8 @@ Precedence:
 ### Configuration option
 
 - `--config <PATH>`: use a non-default `shellshelf` config file
+
+`--add-repo` is a setup command and must be used on its own.
 
 ## Web Interface
 
@@ -211,11 +225,11 @@ Shelf names may contain only:
 
 When search keywords are provided without `--shelf`, `shellshelf` searches across all shelves in the selected scope:
 
-- default reads: local shelves, plus configured default shared scope if one applies
+- default reads: local shelves, plus all shared teams when a shared repo is configured, unless `shared_repo.default_team` narrows the default
 - `--team <TEAM>`: every shelf for that team
 - `--all-teams`: every shelf for every team
 - `--local-only`: local shelves only
-- `--shared-only`: every shelf in the configured default shared scope
+- `--shared-only`: every shelf in the default shared scope, which is all teams unless `shared_repo.default_team` narrows it
 
 `--create-shelf <NAME>` creates the requested shelf file explicitly and exits. If the shelf already exists, `shellshelf` reports that and does not overwrite it.
 
@@ -235,11 +249,11 @@ Import behavior:
 
 `--list-shelves` does not resolve an active shelf. It lists shelf names for the selected scope:
 
-- no shared flags: local shelves, plus configured default shared scope if one applies
+- no shared flags: local shelves, plus all shared teams when a shared repo is configured, unless `shared_repo.default_team` narrows the default
 - `--team <TEAM>`: shelves for that team only
 - `--all-teams`: shelves grouped by team
 - `--local-only`: local shelves only
-- `--shared-only`: shared shelves for the configured default shared scope
+- `--shared-only`: shared shelves for the default shared scope, which is all teams unless `shared_repo.default_team` narrows it
 
 ## Shared Mode Rules
 
@@ -253,7 +267,6 @@ Import behavior:
 - `--local-only` and `--shared-only` are read-only controls and cannot be used with `--add`
 - `--local-only` and `--shared-only` are read-only controls and cannot be used with `--import-postman`
 - `--local-only` and `--shared-only` cannot be used with `--team` or `--all-teams`
-- `--shared-only` without `--team` or `--all-teams` requires `shared_repo.default_team` or `shared_repo.default_all_teams`
 - `--repo` and `--teams-dir` may be used for default read commands without `--team`
 - `--repo` and `--teams-dir` still require `--team` for write commands
 - `--description` can only be used with `--add`

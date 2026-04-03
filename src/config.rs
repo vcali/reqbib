@@ -476,11 +476,141 @@ fn list_shelves_in_dir(dir: &Path) -> Result<Vec<String>> {
 }
 
 pub(crate) fn resolve_config(matches: &ArgMatches) -> Result<ShellshelfConfig> {
-    let config_path = matches
+    let config_path = resolve_config_path(matches);
+    ShellshelfConfig::load_from_file(&config_path)
+}
+
+pub(crate) fn resolve_config_path(matches: &ArgMatches) -> PathBuf {
+    matches
         .get_one::<String>("config")
         .map(PathBuf::from)
-        .unwrap_or_else(get_default_config_file_path);
-    ShellshelfConfig::load_from_file(&config_path)
+        .unwrap_or_else(get_default_config_file_path)
+}
+
+pub(crate) fn write_config(path: &Path, config: &ShellshelfConfig) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let mut object = serde_json::Map::new();
+
+    if let Some(shared_repo) = config.shared_repo.as_ref() {
+        object.insert(
+            "shared_repo".to_string(),
+            serde_json::Value::Object(shared_repo_to_json_map(shared_repo)),
+        );
+    }
+
+    if let Some(default_list_limit) = config.default_list_limit {
+        object.insert(
+            "default_list_limit".to_string(),
+            serde_json::Value::Number(default_list_limit.into()),
+        );
+    }
+
+    if let Some(default_shelf) = config.default_shelf.as_ref() {
+        object.insert(
+            "default_shelf".to_string(),
+            serde_json::Value::String(default_shelf.clone()),
+        );
+    }
+
+    if let Some(web) = web_to_json_value(&config.web) {
+        object.insert("web".to_string(), web);
+    }
+
+    fs::write(
+        path,
+        serde_json::to_string_pretty(&serde_json::Value::Object(object))?,
+    )?;
+    Ok(())
+}
+
+fn shared_repo_to_json_map(shared_repo: &SharedRepoConfig) -> serde_json::Map<String, Value> {
+    let mut object = serde_json::Map::new();
+
+    match shared_repo {
+        SharedRepoConfig::Path(config) => {
+            object.insert("mode".to_string(), Value::String("path".to_string()));
+            object.insert(
+                "path".to_string(),
+                Value::String(config.path.display().to_string()),
+            );
+            insert_optional_path(&mut object, "teams_dir", config.teams_dir.as_ref());
+            insert_optional_string(&mut object, "default_team", config.default_team.as_ref());
+            insert_optional_bool(&mut object, "default_all_teams", config.default_all_teams);
+        }
+        SharedRepoConfig::Github(config) => {
+            object.insert("mode".to_string(), Value::String("github".to_string()));
+            object.insert(
+                "github_repo".to_string(),
+                Value::String(config.github_repo.clone()),
+            );
+            insert_optional_path(&mut object, "teams_dir", config.teams_dir.as_ref());
+            insert_optional_string(&mut object, "default_team", config.default_team.as_ref());
+            insert_optional_bool(&mut object, "default_all_teams", config.default_all_teams);
+            if !config.auto_update_repo {
+                object.insert("auto_update_repo".to_string(), Value::Bool(false));
+            }
+            if config.auto_update_interval_minutes
+                != DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES
+            {
+                object.insert(
+                    "auto_update_interval_minutes".to_string(),
+                    Value::Number(config.auto_update_interval_minutes.into()),
+                );
+            }
+        }
+    }
+
+    object
+}
+
+fn web_to_json_value(web: &WebConfig) -> Option<Value> {
+    let mut object = serde_json::Map::new();
+
+    if let Some(port) = web.port {
+        object.insert("port".to_string(), Value::Number(port.into()));
+    }
+
+    if web.theme != WebTheme::default() {
+        object.insert(
+            "theme".to_string(),
+            Value::String(web.theme.as_str().to_string()),
+        );
+    }
+
+    if object.is_empty() {
+        None
+    } else {
+        Some(Value::Object(object))
+    }
+}
+
+fn insert_optional_path(
+    object: &mut serde_json::Map<String, Value>,
+    key: &str,
+    value: Option<&PathBuf>,
+) {
+    if let Some(path) = value {
+        object.insert(key.to_string(), Value::String(path.display().to_string()));
+    }
+}
+
+fn insert_optional_string(
+    object: &mut serde_json::Map<String, Value>,
+    key: &str,
+    value: Option<&String>,
+) {
+    if let Some(value) = value {
+        object.insert(key.to_string(), Value::String(value.clone()));
+    }
+}
+
+fn insert_optional_bool(object: &mut serde_json::Map<String, Value>, key: &str, value: bool) {
+    if value {
+        object.insert(key.to_string(), Value::Bool(true));
+    }
 }
 
 pub(crate) fn resolve_shared_storage_context(
@@ -697,13 +827,14 @@ pub(crate) fn shared_repository_required_message() -> &'static str {
 mod tests {
     use super::{
         get_local_data_file_path, get_team_data_file_path, list_all_team_shelves,
-        list_local_shelves, list_team_shelves, resolve_active_shelf, validate_relative_directory,
-        validate_shelf_name, DefaultSharedReadTarget, GithubSharedRepoConfig, PathSharedRepoConfig,
-        SharedRepoConfig, SharedStorageContext, ShellshelfConfig, WebConfig, WebTheme,
-        BUILTIN_DEFAULT_SHELF,
+        list_local_shelves, list_team_shelves, resolve_active_shelf, resolve_config_path,
+        validate_relative_directory, validate_shelf_name, write_config, DefaultSharedReadTarget,
+        GithubSharedRepoConfig, PathSharedRepoConfig, SharedRepoConfig, SharedStorageContext,
+        ShellshelfConfig, WebConfig, WebTheme, BUILTIN_DEFAULT_SHELF,
     };
     use crate::cli::build_cli;
     use crate::github::DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES;
+    use serde_json::Value;
     use std::fs;
     use std::path::{Path, PathBuf};
     use tempfile::TempDir;
@@ -1105,6 +1236,63 @@ mod tests {
         assert_eq!(
             resolve_active_shelf(&matches, &config).unwrap(),
             BUILTIN_DEFAULT_SHELF
+        );
+    }
+
+    #[test]
+    fn test_resolve_config_path_uses_cli_override() {
+        let matches = build_cli()
+            .try_get_matches_from(["shellshelf", "--config", "/tmp/custom-shellshelf.json"])
+            .unwrap();
+
+        assert_eq!(
+            resolve_config_path(&matches),
+            PathBuf::from("/tmp/custom-shellshelf.json")
+        );
+    }
+
+    #[test]
+    fn test_write_config_emits_github_shared_repo_shape() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("config.json");
+        let config = ShellshelfConfig {
+            shared_repo: Some(SharedRepoConfig::Github(GithubSharedRepoConfig {
+                github_repo: "acme/shared-shellshelf".to_string(),
+                teams_dir: Some(PathBuf::from("company-teams")),
+                auto_update_repo: false,
+                auto_update_interval_minutes: 30,
+                default_team: Some("platform".to_string()),
+                default_all_teams: false,
+            })),
+            default_list_limit: Some(50),
+            default_shelf: Some("curl".to_string()),
+            web: WebConfig {
+                port: Some(4920),
+                theme: WebTheme::Giphy,
+            },
+        };
+
+        write_config(&config_path, &config).unwrap();
+
+        let value: Value = serde_json::from_str(&fs::read_to_string(config_path).unwrap()).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "shared_repo": {
+                    "mode": "github",
+                    "github_repo": "acme/shared-shellshelf",
+                    "teams_dir": "company-teams",
+                    "default_team": "platform",
+                    "auto_update_repo": false,
+                    "auto_update_interval_minutes": 30
+                },
+                "default_list_limit": 50,
+                "default_shelf": "curl",
+                "web": {
+                    "port": 4920,
+                    "theme": "giphy"
+                }
+            })
         );
     }
 }

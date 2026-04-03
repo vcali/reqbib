@@ -7,6 +7,30 @@ use std::time::{Duration, SystemTime};
 
 pub(crate) const DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES: u64 = 15;
 
+pub(crate) fn normalize_github_repo_input(input: &str) -> Result<String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err("GitHub repository cannot be empty.".into());
+    }
+
+    let stripped = trimmed
+        .strip_prefix("https://github.com/")
+        .or_else(|| trimmed.strip_prefix("http://github.com/"))
+        .or_else(|| trimmed.strip_prefix("https://www.github.com/"))
+        .or_else(|| trimmed.strip_prefix("http://www.github.com/"))
+        .or_else(|| trimmed.strip_prefix("github.com/"))
+        .or_else(|| trimmed.strip_prefix("git@github.com:"))
+        .unwrap_or(trimmed);
+
+    let normalized = stripped
+        .trim_end_matches('/')
+        .trim_end_matches(".git")
+        .to_string();
+
+    validate_github_repo_name(&normalized)?;
+    Ok(normalized)
+}
+
 pub(crate) fn validate_github_repo_name(repo: &str) -> Result<()> {
     let Some((owner, name)) = repo.split_once('/') else {
         return Err("GitHub repository must be in the format <owner>/<repo>.".into());
@@ -198,7 +222,8 @@ mod tests {
     use super::{
         ensure_github_repo_checkout_with_runner, get_github_repo_checkout_path,
         get_github_repo_sync_stamp_path, maybe_update_github_repo_checkout_with_runner,
-        validate_github_repo_name, DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES,
+        normalize_github_repo_input, validate_github_repo_name,
+        DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES,
     };
     use std::fs;
     use std::path::Path;
@@ -208,6 +233,28 @@ mod tests {
     #[test]
     fn test_validate_github_repo_name_accepts_owner_repo() {
         validate_github_repo_name("acme/shared-shellshelf").unwrap();
+    }
+
+    #[test]
+    fn test_normalize_github_repo_input_accepts_common_url_forms() {
+        assert_eq!(
+            normalize_github_repo_input("https://github.com/acme/shared-shellshelf.git").unwrap(),
+            "acme/shared-shellshelf"
+        );
+        assert_eq!(
+            normalize_github_repo_input("git@github.com:acme/shared-shellshelf.git").unwrap(),
+            "acme/shared-shellshelf"
+        );
+        assert_eq!(
+            normalize_github_repo_input("github.com/acme/shared-shellshelf/").unwrap(),
+            "acme/shared-shellshelf"
+        );
+    }
+
+    #[test]
+    fn test_normalize_github_repo_input_rejects_empty_input() {
+        let error = normalize_github_repo_input("   ").expect_err("empty repo should fail");
+        assert_eq!(error.to_string(), "GitHub repository cannot be empty.");
     }
 
     #[test]

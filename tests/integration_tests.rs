@@ -1000,7 +1000,7 @@ fn test_default_team_and_shelf_combined_read_hides_duplicates() {
 }
 
 #[test]
-fn test_shared_only_requires_default_shared_selection() {
+fn test_shared_only_defaults_to_all_teams_when_shared_repo_is_configured() {
     let temp_dir = TempDir::new().unwrap();
     let home_dir = temp_dir.path();
     let shared_repo = home_dir.join("shared-shellshelf");
@@ -1018,12 +1018,22 @@ fn test_shared_only_requires_default_shared_selection() {
         None,
     );
 
+    write_command_database(
+        &shared_repo
+            .join("teams")
+            .join("platform")
+            .join("shelves")
+            .join("curl.json"),
+        &[("curl https://platform.example.com/health", Some("Platform"))],
+    );
+
     let mut cmd = Command::cargo_bin("shellshelf").unwrap();
     cmd.env("HOME", home_dir).args(["--shared-only", "--list"]);
 
-    cmd.assert().failure().stderr(predicate::str::contains(
-        "No default shared selection configured",
-    ));
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("=== SHARED / PLATFORM / CURL ==="))
+        .stdout(predicate::str::contains("platform.example.com/health"));
 }
 
 #[test]
@@ -1188,6 +1198,112 @@ fn test_github_mode_updates_existing_checkout_when_due() {
     assert!(git_args.contains("-C"));
     assert!(git_args.contains("pull"));
     assert!(git_args.contains("--ff-only"));
+}
+
+#[test]
+fn test_add_repo_writes_github_shared_repo_config_from_url() {
+    let temp_dir = TempDir::new().unwrap();
+    let home_dir = temp_dir.path();
+    let shellshelf_dir = home_dir.join(".shellshelf");
+    let config_path = shellshelf_dir.join("config.json");
+
+    fs::create_dir_all(&shellshelf_dir).unwrap();
+    write_text_file(
+        &config_path,
+        r#"{
+  "default_shelf": "curl",
+  "web": {
+    "port": 4920,
+    "theme": "giphy"
+  },
+  "shared_repo": {
+    "mode": "path",
+    "path": "/tmp/old-shared-shellshelf",
+    "teams_dir": "company-teams",
+    "default_team": "platform"
+  }
+}"#,
+    );
+
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", home_dir).args([
+        "--add-repo",
+        "https://github.com/acme/shared-shellshelf.git",
+    ]);
+
+    cmd.assert().success().stdout(predicate::str::contains(
+        "Configured shared GitHub repository 'acme/shared-shellshelf'",
+    ));
+
+    let value: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+    assert_eq!(
+        value,
+        serde_json::json!({
+            "default_shelf": "curl",
+            "shared_repo": {
+                "mode": "github",
+                "github_repo": "acme/shared-shellshelf",
+                "teams_dir": "company-teams",
+                "default_team": "platform"
+            },
+            "web": {
+                "port": 4920,
+                "theme": "giphy"
+            }
+        })
+    );
+}
+
+#[test]
+fn test_add_repo_rejects_combined_flags() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+
+    cmd.env("HOME", temp_dir.path())
+        .args(["--add-repo", "acme/shared-shellshelf", "--list"]);
+
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "--add-repo must be used on its own.",
+    ));
+}
+
+#[test]
+fn test_default_list_shelves_includes_all_teams_when_shared_repo_is_configured() {
+    let temp_dir = TempDir::new().unwrap();
+    let home_dir = temp_dir.path();
+    let shellshelf_dir = home_dir.join(".shellshelf");
+    let config_path = shellshelf_dir.join("config.json");
+    let shared_repo = home_dir.join("shared-shellshelf");
+
+    fs::create_dir_all(&shellshelf_dir).unwrap();
+    write_path_config(&config_path, &shared_repo, "teams", None, None, None, None);
+    write_command_database(
+        &shared_repo
+            .join("teams")
+            .join("platform")
+            .join("shelves")
+            .join("curl.json"),
+        &[("curl https://platform.example.com/health", Some("Platform"))],
+    );
+    write_command_database(
+        &shared_repo
+            .join("teams")
+            .join("infra")
+            .join("shelves")
+            .join("media.json"),
+        &[("curl https://infra.example.com/media", Some("Infra"))],
+    );
+
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", home_dir).arg("--list-shelves");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("=== SHARED / INFRA ==="))
+        .stdout(predicate::str::contains("=== SHARED / PLATFORM ==="))
+        .stdout(predicate::str::contains("[1] media"))
+        .stdout(predicate::str::contains("[1] curl"));
 }
 
 #[test]

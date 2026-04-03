@@ -29,6 +29,7 @@ At a high level, execution is:
 4. Resolve local or shared storage context from the nested `shared_repo` config or CLI overrides.
 5. For GitHub-backed shared mode, ensure a local checkout exists and refresh it if due.
 6. Execute one of the user operations:
+   - add shared GitHub repo config
    - web interface
    - add
    - import Postman collection
@@ -92,6 +93,7 @@ This is still a simple in-memory scan over JSON-backed records. It is acceptable
 Current GitHub support is intentionally narrow:
 
 - repository selection comes from CLI or `shared_repo` config
+- `--add-repo` can write `shared_repo.mode = "github"` config from a GitHub URL or `owner/repo`
 - bootstrap uses `gh repo clone`
 - refresh uses `git pull --ff-only`
 - refresh state is tracked in `~/.shellshelf/state`
@@ -120,8 +122,7 @@ Current behavior:
 - `--import-postman` creates a new shelf from an exported Postman Collection v2.1 JSON file
 - `--list-shelves` skips active-shelf resolution and instead enumerates shelf files in the selected scope
 - if `shared_repo.default_team` is configured, non-team list/search defaults to local plus that team
-- if `shared_repo.default_all_teams` is `true`, non-team list/search defaults to local plus all teams
-- otherwise non-team list/search defaults to local only
+- otherwise non-team list/search defaults to local plus all teams whenever a shared repo is configured
 - `--local-only` and `--shared-only` override that behavior
 - `--team` and `--all-teams` stay explicit shared-only modes
 - local entries that exactly duplicate displayed shared entries are hidden from the default combined output

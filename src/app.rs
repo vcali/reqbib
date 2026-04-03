@@ -2,10 +2,14 @@ use crate::cli::build_cli;
 use crate::config::{
     get_local_data_file_path, list_all_team_shelves, list_local_shelves, list_team_shelves,
     load_all_team_commands, load_team_commands, resolve_active_shelf, resolve_config,
-    resolve_data_file_path, resolve_shared_storage_context, shared_repository_required_message,
-    DefaultSharedReadTarget, SharedStorageContext, ShellshelfConfig,
+    resolve_config_path, resolve_data_file_path, resolve_shared_storage_context,
+    shared_repository_required_message, write_config, DefaultSharedReadTarget,
+    GithubSharedRepoConfig, SharedRepoConfig, SharedStorageContext, ShellshelfConfig,
 };
 use crate::database::{CommandDatabase, StoredCommand};
+use crate::github::{
+    normalize_github_repo_input, DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES,
+};
 use crate::postman_import::{import_postman_collection, PostmanImportOutcome};
 use crate::web::run_web_server;
 use crate::Result;
@@ -13,9 +17,6 @@ use std::collections::HashSet;
 use std::path::Path;
 
 const DEFAULT_LIST_LIMIT: usize = 20;
-const DEFAULT_SHARED_SELECTION_REQUIRED_MESSAGE: &str =
-    "No default shared selection configured. Use --team, --all-teams, or configure shared_repo.default_team / shared_repo.default_all_teams.";
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum OutputSectionSource {
     Local { shelf: String },
@@ -131,14 +132,20 @@ pub fn run() -> Result<()> {
     }
 
     let matches = build_cli().get_matches();
+    let config_path = resolve_config_path(&matches);
     let config = resolve_config(&matches)?;
     validate_matches(&matches)?;
+    let add_repo = matches.get_one::<String>("add-repo");
     let add_command = matches.get_one::<String>("add");
     let import_postman_path = matches.get_one::<String>("import-postman");
     let list_commands = matches.get_flag("list");
     let search_keywords: Option<Vec<String>> = matches
         .get_many::<String>("keywords")
         .map(|keywords| keywords.cloned().collect());
+
+    if let Some(repo_input) = add_repo {
+        return configure_shared_repo(&config_path, &config, repo_input);
+    }
 
     let all_teams = matches.get_flag("all-teams");
     let shared_context = resolve_shared_storage_context(&matches, &config)?;
@@ -374,12 +381,89 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
+fn configure_shared_repo(
+    config_path: &Path,
+    config: &ShellshelfConfig,
+    repo_input: &str,
+) -> Result<()> {
+    let github_repo = normalize_github_repo_input(repo_input)?;
+    let (teams_dir, default_team, default_all_teams, auto_update_repo, auto_update_interval) =
+        match config.shared_repo.as_ref() {
+            Some(SharedRepoConfig::Path(existing)) => (
+                existing.teams_dir.clone(),
+                existing.default_team.clone(),
+                existing.default_all_teams,
+                true,
+                DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES,
+            ),
+            Some(SharedRepoConfig::Github(existing)) => (
+                existing.teams_dir.clone(),
+                existing.default_team.clone(),
+                existing.default_all_teams,
+                existing.auto_update_repo,
+                existing.auto_update_interval_minutes,
+            ),
+            None => (
+                None,
+                None,
+                false,
+                true,
+                DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES,
+            ),
+        };
+
+    let mut updated = config.clone();
+    updated.shared_repo = Some(SharedRepoConfig::Github(GithubSharedRepoConfig {
+        github_repo: github_repo.clone(),
+        teams_dir,
+        auto_update_repo,
+        auto_update_interval_minutes: auto_update_interval,
+        default_team,
+        default_all_teams,
+    }));
+    write_config(config_path, &updated)?;
+
+    println!(
+        "Configured shared GitHub repository '{github_repo}' in {}.",
+        config_path.display()
+    );
+    Ok(())
+}
+
 fn validate_matches(matches: &clap::ArgMatches) -> Result<()> {
+    let add_repo = matches.get_one::<String>("add-repo");
     let all_teams = matches.get_flag("all-teams");
     let local_only = matches.get_flag("local-only");
     let shared_only = matches.get_flag("shared-only");
     let import_postman = matches.get_one::<String>("import-postman");
     let web_mode = matches.get_flag("web");
+    let has_keywords = matches
+        .get_many::<String>("keywords")
+        .map(|values| values.len() > 0)
+        .unwrap_or(false);
+
+    if add_repo.is_some()
+        && (web_mode
+            || matches.get_one::<u16>("web-port").is_some()
+            || matches.get_one::<String>("add").is_some()
+            || matches.get_one::<String>("description").is_some()
+            || import_postman.is_some()
+            || matches.get_one::<String>("target-shelf").is_some()
+            || matches.get_one::<String>("shelf").is_some()
+            || matches.get_one::<String>("create-shelf").is_some()
+            || matches.get_flag("list")
+            || matches.get_flag("list-shelves")
+            || matches.get_one::<usize>("limit").is_some()
+            || matches.get_one::<String>("repo").is_some()
+            || matches.get_one::<String>("teams-dir").is_some()
+            || matches.get_one::<String>("team").is_some()
+            || all_teams
+            || local_only
+            || shared_only
+            || has_keywords)
+    {
+        return Err("--add-repo must be used on its own.".into());
+    }
 
     if matches.get_one::<u16>("web-port").is_some() && !web_mode {
         return Err("--web-port can only be used with --web.".into());
@@ -412,11 +496,7 @@ fn validate_matches(matches: &clap::ArgMatches) -> Result<()> {
                     .into(),
             );
         }
-        if matches
-            .get_many::<String>("keywords")
-            .map(|values| values.len() > 0)
-            .unwrap_or(false)
-        {
+        if has_keywords {
             return Err("--web cannot be combined with search keywords.".into());
         }
     }
@@ -462,11 +542,7 @@ fn validate_matches(matches: &clap::ArgMatches) -> Result<()> {
         if matches.get_one::<String>("shelf").is_some() {
             return Err("--shelf cannot be used with --list-shelves.".into());
         }
-        if matches
-            .get_many::<String>("keywords")
-            .map(|values| values.len() > 0)
-            .unwrap_or(false)
-        {
+        if has_keywords {
             return Err("--list-shelves cannot be combined with search keywords.".into());
         }
     }
@@ -488,11 +564,7 @@ fn validate_matches(matches: &clap::ArgMatches) -> Result<()> {
                 "--create-shelf cannot be combined with --add, --list, or --import-postman.".into(),
             );
         }
-        if matches
-            .get_many::<String>("keywords")
-            .map(|values| values.len() > 0)
-            .unwrap_or(false)
-        {
+        if has_keywords {
             return Err("--create-shelf cannot be combined with search keywords.".into());
         }
         if matches.get_one::<String>("description").is_some() {
@@ -565,11 +637,7 @@ fn validate_matches(matches: &clap::ArgMatches) -> Result<()> {
         if matches.get_one::<usize>("limit").is_some() {
             return Err("--limit cannot be used with --import-postman.".into());
         }
-        if matches
-            .get_many::<String>("keywords")
-            .map(|values| values.len() > 0)
-            .unwrap_or(false)
-        {
+        if has_keywords {
             return Err("--import-postman cannot be combined with search keywords.".into());
         }
         if matches.get_one::<String>("repo").is_some()
@@ -803,8 +871,8 @@ fn resolve_default_read_plan(
             shared_target: Some(
                 config
                     .default_shared_read_target()
-                    .ok_or(DEFAULT_SHARED_SELECTION_REQUIRED_MESSAGE)?
-                    .into(),
+                    .map(Into::into)
+                    .unwrap_or(SharedReadTarget::AllTeams),
             ),
         });
     }
@@ -812,7 +880,12 @@ fn resolve_default_read_plan(
     Ok(DefaultReadPlan {
         include_local: true,
         shared_target: if shared_context.is_some() {
-            config.default_shared_read_target().map(Into::into)
+            Some(
+                config
+                    .default_shared_read_target()
+                    .map(Into::into)
+                    .unwrap_or(SharedReadTarget::AllTeams),
+            )
         } else {
             None
         },

@@ -14,6 +14,12 @@ brew install vcali/tap/shellshelf
 
 Default config lives at `~/.shellshelf/config.json`.
 
+Connect a shared GitHub-backed repo once:
+
+```bash
+shellshelf --add-repo https://github.com/acme/shared-shellshelf.git
+```
+
 Search within a shelf or across shelves:
 
 ```bash
@@ -29,6 +35,13 @@ Search shared team shelves:
 ```bash
 shellshelf --repo /path/to/shared-shellshelf --team platform -s curl webhook
 shellshelf --repo /path/to/shared-shellshelf --all-teams -s curl stripe webhook
+```
+
+When a shared repo is configured, unscoped reads default to local shelves plus all team shelves:
+
+```bash
+shellshelf --list-shelves
+shellshelf httpbin
 ```
 
 Start the localhost web interface:
@@ -194,6 +207,15 @@ GitHub-backed shared usage requires:
 
 - `gh` installed and authenticated
 - `git` available locally
+
+You can write the `shared_repo.mode = "github"` config for that automatically with:
+
+```bash
+shellshelf --add-repo https://github.com/acme/shared-shellshelf.git
+shellshelf --add-repo acme/shared-shellshelf
+```
+
+Once a shared repo is configured, default read commands include local shelves plus all teams unless you explicitly narrow with `--team`, `--all-teams`, `--local-only`, `--shared-only`, or `shared_repo.default_team`.
 
 ## Documentation
 
